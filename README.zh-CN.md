@@ -1,7 +1,7 @@
 # OpenCLI
 
 > **把任何网站变成你的命令行工具。**  
-> 零风控 · 复用 Chrome 登录 · AI 自动发现接口
+> 零风控 · 复用 Chrome 登录 · AI 自动发现接口 · 80+ 命令 · 19 站点
 
 [English](./README.md)
 
@@ -9,7 +9,7 @@
 [![Node.js Version](https://img.shields.io/node/v/@jackwener/opencli?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/npm/l/@jackwener/opencli?style=flat-square)](./LICENSE)
 
-OpenCLI 将任何网站变成命令行工具 — B站、知乎、小红书、Twitter、Reddit 等众多站点 — 复用浏览器登录态，AI 驱动探索。
+OpenCLI 将任何网站变成命令行工具 — B站、知乎、小红书、Twitter/X、Reddit、YouTube 等 [19 个站点](#内置命令) — 复用浏览器登录态，AI 驱动探索。
 
 ---
 
@@ -29,8 +29,9 @@ OpenCLI 将任何网站变成命令行工具 — B站、知乎、小红书、Twi
 
 ## 亮点
 
-- **多站点覆盖** — B站、知乎、小红书、Twitter、Reddit 等众多站点
+- **多站点覆盖** — B站、知乎、小红书、Twitter、Reddit 等 19 个站点，80+ 命令
 - **零风控** — 复用 Chrome 登录态，无需存储任何凭证
+- **自修复配置** — `opencli setup` 自动发现 Token；`opencli doctor` 诊断 10+ 工具配置；`--fix` 一键修复
 - **AI 原生** — `explore` 自动发现 API，`synthesize` 生成适配器，`cascade` 探测认证策略
 - **动态加载引擎** — 声明式的 `.yaml` 或者底层定制的 `.ts` 适配器，放入 `clis/` 文件夹即可自动注册生效
 
@@ -84,10 +85,12 @@ export PLAYWRIGHT_MCP_EXTENSION_TOKEN="<你的-token>"
 
 </details>
 
-配置后运行 `opencli doctor` 检查所有位置的 Token 状态：
+配置后运行 `opencli doctor` 检查扩展安装、Token 一致性和所有配置文件状态：
 
 ```bash
-opencli doctor
+opencli doctor            # Token 与配置诊断
+opencli doctor --live     # 额外测试浏览器连通性
+opencli doctor --fix -y   # 自动修复所有不一致的配置文件
 ```
 
 ## 快速开始
@@ -129,27 +132,29 @@ npm install -g @jackwener/opencli@latest
 
 ## 内置命令
 
-| 站点 | 命令 | 模式 |
-|------|------|------|
-| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` | 🔐 浏览器 |
-| **zhihu** | `hot` `search` `question` | 🔐 浏览器 |
-| **xiaohongshu** | `search` `notifications` `feed` `user` | 🔐 浏览器 |
-| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | 🔐 浏览器 |
-| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` | 🔐 浏览器 |
-| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 🔐 浏览器 |
-| **weibo** | `hot` | 🔐 浏览器 |
-| **boss** | `search` `detail` | 🔐 浏览器 |
-| **coupang** | `search` `add-to-cart` | 🔐 浏览器 |
-| **youtube** | `search` | 🔐 浏览器 |
-| **linkedin** | `search` | 🔐 浏览器 |
-| **yahoo-finance** | `quote` | 🔐 浏览器 |
-| **reuters** | `search` | 🔐 浏览器 |
-| **smzdm** | `search` | 🔐 浏览器 |
-| **ctrip** | `search` | 🔐 浏览器 |
-| **github** | `search` | 🌐 公共 API |
-| **v2ex** | `hot` `latest` `topic` `daily` `me` `notifications` | 🌐 公共 API / 🔐 浏览器 |
-| **hackernews** | `top` | 🌐 公共 API |
-| **bbc** | `news` | 🌐 公共 API |
+**19 个站点 · 80+ 命令** — 运行 `opencli list` 查看完整注册表。
+
+| 站点 | 命令 | 数量 | 模式 |
+|------|------|:----:|------|
+| **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` | 18 | 🔐 浏览器 |
+| **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 15 | 🔐 浏览器 |
+| **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` | 11 | 🔐 浏览器 |
+| **v2ex** | `hot` `latest` `topic` `daily` `me` `notifications` | 6 | 🌐 / 🔐 |
+| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` | 6 | 🔐 浏览器 |
+| **xiaohongshu** | `search` `notifications` `feed` `me` `user` | 5 | 🔐 浏览器 |
+| **youtube** | `search` `video` `transcript` | 3 | 🔐 浏览器 |
+| **zhihu** | `hot` `search` `question` | 3 | 🔐 浏览器 |
+| **boss** | `search` `detail` | 2 | 🔐 浏览器 |
+| **coupang** | `search` `add-to-cart` | 2 | 🔐 浏览器 |
+| **bbc** | `news` | 1 | 🌐 公共 API |
+| **ctrip** | `search` | 1 | 🔐 浏览器 |
+| **github** | `search` | 1 | 🌐 公共 API |
+| **hackernews** | `top` | 1 | 🌐 公共 API |
+| **linkedin** | `search` | 1 | 🔐 浏览器 |
+| **reuters** | `search` | 1 | 🔐 浏览器 |
+| **smzdm** | `search` | 1 | 🔐 浏览器 |
+| **weibo** | `hot` | 1 | 🔐 浏览器 |
+| **yahoo-finance** | `quote` | 1 | 🔐 浏览器 |
 
 ## 输出格式
 
@@ -201,6 +206,7 @@ opencli cascade https://api.example.com/data
   - 确保 Node.js 版本 `>= 18`。旧版不支持我们使用的现代核心库 API。
 - **Token 问题**
   - 运行 `opencli doctor` 诊断所有工具的 Token 配置状态。
+  - 使用 `opencli doctor --live` 测试浏览器连通性。
 
 ## 版本发布
 
