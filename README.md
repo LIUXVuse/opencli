@@ -150,11 +150,53 @@ git clone git@github.com:jackwener/opencli.git && cd opencli && npm install && n
 | **twitter** | `trending` `search` `timeline` `bookmarks` `post` `download` `profile` `article` `like` `likes` `notifications` `reply` `reply-dm` `thread` `follow` `unfollow` `followers` `following` `block` `unblock` `bookmark` `unbookmark` `delete` `hide-reply` `accept` |
 | **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `user` `user-posts` `user-comments` `read` `save` `saved` `subscribe` `upvote` `upvoted` `comment` |
 | **amazon** | `bestsellers` `search` `product` `offer` `discussion` |
+| **trip** | `search` `sim-rank` — SIM 卡 CP 值排名，從 trip.com 撈取方案依性價比排序 |
 | **gemini** | `new` `ask` `image` |
 | **notebooklm** | `status` `list` `open` `select` `current` `get` `metadata` `source-list` `source-get` `source-fulltext` `source-guide` `history` `note-list` `notes-list` `notes-get` `summary` |
 | **spotify** | `auth` `status` `play` `pause` `next` `prev` `volume` `search` `queue` `shuffle` `repeat` |
 
 70+ adapters in total — **[→ see all supported sites & commands](./docs/adapters/index.md)**
+
+### trip sim-rank — SIM 卡 CP 值排名
+
+從 [trip.com](https://www.trip.com) 查詢 SIM 卡方案，解析天數、流量、類型，並依 CP 值（每元可得流量）排名。**不需要瀏覽器、不需要登入**，直接使用 Public API。
+
+```bash
+# 查詢越南 SIM 卡 CP 值排名（預設）
+opencli trip sim-rank
+
+# 指定國家
+opencli trip sim-rank --country Vietnam
+opencli trip sim-rank --country Japan
+
+# 只看 eSIM
+opencli trip sim-rank --sim-type esim
+
+# 只看不需要實名制的方案
+opencli trip sim-rank --no-real-name
+
+# 按價格排序，輸出 JSON
+opencli trip sim-rank --sort price -f json
+
+# 組合條件
+opencli trip sim-rank --country Vietnam --sim-type esim --no-real-name --limit 10
+```
+
+**輸出欄位說明：**
+
+| 欄位 | 說明 |
+|------|------|
+| `rank` | CP 值排名 |
+| `name` | 方案名稱（簡化） |
+| `type` | eSIM / SIM card |
+| `plan` | 計費方式：Day Pass（按日）/ Total Data（總量）/ Fixed（固定） |
+| `days` | 最少天數 |
+| `daily_gb` | 每日流量（`彈性` 表示彈性選擇） |
+| `min_price_usd` | 最低起始價格（USD） |
+| `cp_score` | CP 值；`~` 開頭表示彈性方案估算值（以 0.5GB/日 計算） |
+| `real_name_req` | 是否需要實名制（Yes/No） |
+| `url` | trip.com 產品連結 |
+
 
 ## CLI Hub
 

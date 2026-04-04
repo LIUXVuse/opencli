@@ -72,6 +72,7 @@ Run `opencli list` for the live registry.
 | **[wikipedia](./browser/wikipedia)** | `search` `summary` `random` `trending` | 🌐 Public |
 | **[lobsters](./browser/lobsters)** | `hot` `newest` `active` `tag` | 🌐 Public |
 | **[steam](./browser/steam)** | `top-sellers` | 🌐 Public |
+| **[forex](./browser/forex)** | `rate` | 🌐 Public |
 
 ## Desktop Adapters
 
