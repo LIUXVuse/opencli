@@ -35,6 +35,15 @@ function parseDailyGb(name: string): number | null {
   return null;
 }
 
+function parseDailyGbFromRemark(remark: string): number | null {
+  // remark 格式："Package QR code-1 day-Daily 0.5GB"、"Daily - 0.5GB"、"DayPass - 500MB"
+  const gbMatch = remark.match(/daily\s*[-–]?\s*([\d.]+)\s*gb/i);
+  if (gbMatch) return parseFloat(gbMatch[1]);
+  const mbMatch = remark.match(/(?:daily|daypass)\s*[-–]?\s*([\d.]+)\s*mb/i);
+  if (mbMatch) return parseFloat((parseFloat(mbMatch[1]) / 1024).toFixed(3));
+  return null;
+}
+
 /**
  * 從產品名稱解析總流量（Total Data 方案）
  * 例如: "Total data 15GB/35GB/50GB/100GB" → 15（取最小選項）
@@ -183,9 +192,10 @@ export async function fetchAndRankSimCards(opts: {
     const price = p.priceInfo?.price ?? 0;
     const url = p.basicInfo?.detailUrl?.URL ?? p.basicInfo?.detailUrl?.ONLINE ?? '';
 
-    // 計算每日流量：優先解析 "Daily XGB"，其次從 Total Data 總量推算
-    let dailyGb = parseDailyGb(name);
+    // 計算每日流量：優先解析名稱，其次從 remark 備援，最後從 Total Data 總量推算
+    let dailyGb = parseDailyGb(name) ?? parseDailyGbFromRemark(remark);
     let dailyGbIsFromTotal = false;
+    const dailyGbIsFromRemark = dailyGb !== null && parseDailyGb(name) === null;
     if (dailyGb === null && planType.includes('Total Data')) {
       const totalGb = parseTotalGb(name);
       if (totalGb !== null) {
@@ -204,7 +214,7 @@ export async function fetchAndRankSimCards(opts: {
     }
 
     const { cpScore, formula, isEstimate } = calcCpScore(dailyGb, price, days, planType, minDays);
-    const cpDisplay = cpScore !== null ? ((isEstimate || dailyGbIsFromTotal) ? `~${cpScore}` : String(cpScore)) : 'N/A';
+    const cpDisplay = cpScore !== null ? ((isEstimate || dailyGbIsFromTotal || dailyGbIsFromRemark) ? `~${cpScore}` : String(cpScore)) : 'N/A';
 
     return {
       name: name.split(/\s*\|\s*/).slice(0, 2).join(' | ').substring(0, 60),

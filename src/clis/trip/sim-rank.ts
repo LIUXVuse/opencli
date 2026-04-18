@@ -91,6 +91,19 @@ function parseDailyGb(name: string): number | null {
 }
 
 /**
+ * 從 minPriceRemarks 解析每日流量（備援方案）
+ * trip.com remark 格式："Package QR code-1 day-Daily 0.5GB" 或 "Daily - 0.5GB"
+ */
+function parseDailyGbFromRemark(remark: string): number | null {
+  // remark 格式："Package QR code-1 day-Daily 0.5GB"、"Daily - 0.5GB"、"DayPass - 500MB"
+  const gbMatch = remark.match(/daily\s*[-–]?\s*([\d.]+)\s*gb/i);
+  if (gbMatch) return parseFloat(gbMatch[1]);
+  const mbMatch = remark.match(/(?:daily|daypass)\s*[-–]?\s*([\d.]+)\s*mb/i);
+  if (mbMatch) return parseFloat((parseFloat(mbMatch[1]) / 1024).toFixed(3));
+  return null;
+}
+
+/**
  * 每日流量是否為可疑的行銷宣稱（>30GB/天）
  * 超過此值通常是「速度上限描述」而非真實流量
  */
@@ -399,13 +412,15 @@ cli({
       const remark = p.priceInfo?.minPriceRemarks?.[1] ?? '';
       // Fixed 方案名稱解析失敗時，嘗試從 minPriceRemarks 提取
       const days = daysFromName ?? (planType === 'Fixed' ? parseDaysFromRemark(remark) : null);
-      const dailyGb = parseDailyGb(name);
+      // 每日流量：優先從名稱解析，名稱沒有時從 remark 備援
+      const dailyGb = parseDailyGb(name) ?? parseDailyGbFromRemark(remark);
+      const dailyGbIsFromRemark = dailyGb !== null && parseDailyGb(name) === null;
       const realNameReq = parseRealName(name);
       const price = p.priceInfo?.price ?? 0;
       const { cpScore, formula, isEstimate } = calcCpScore(dailyGb, price, days, planType, minDays);
       const url = p.basicInfo?.detailUrl?.URL ?? p.basicInfo?.detailUrl?.ONLINE ?? '';
       const cpDisplay = cpScore !== null
-        ? (isEstimate ? `~${cpScore}` : String(cpScore))
+        ? ((isEstimate || dailyGbIsFromRemark) ? `~${cpScore}` : String(cpScore))
         : 'N/A';
 
       return {
