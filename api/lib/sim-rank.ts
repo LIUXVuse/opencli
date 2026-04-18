@@ -137,6 +137,7 @@ export async function fetchAndRankSimCards(opts: {
   simType?: 'all' | 'esim' | 'physical';
   noRealName?: boolean;
   limit?: number;
+  minDailyGb?: number;
 }): Promise<SimPlan[]> {
   const country = opts.country ?? 'Vietnam';
   const minDays = opts.minDays;
@@ -144,6 +145,7 @@ export async function fetchAndRankSimCards(opts: {
   const simType = opts.simType ?? 'all';
   const noRealName = opts.noRealName ?? false;
   const limit = Math.min(opts.limit ?? 10, 20);
+  const minDailyGb = opts.minDailyGb ?? 3;
   const fetchSize = Math.min(limit * 3, 50);
 
   const filteredItems: Array<{ type: string; values: string[] }> = [];
@@ -242,6 +244,9 @@ export async function fetchAndRankSimCards(opts: {
       const d = item._productDays;
       if (d !== null && (d < minDays || d > maxDays)) return false;
     }
+    // 過濾每日流量不足的方案（dailyGb 已知且低於門檻）
+    const gb = parseFloat(item.daily_gb);
+    if (!isNaN(gb) && gb < minDailyGb) return false;
     return true;
   });
 
