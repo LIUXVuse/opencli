@@ -47,6 +47,8 @@ export interface BrowserSessionInfo {
 export interface IPage {
   goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void>;
   evaluate(js: string): Promise<any>;
+  /** Safely evaluate JS with pre-serialized arguments — prevents injection. */
+  evaluateWithArgs?(js: string, args: Record<string, unknown>): Promise<any>;
   getCookies(opts?: { domain?: string; url?: string }): Promise<BrowserCookie[]>;
   snapshot(opts?: SnapshotOptions): Promise<any>;
   click(ref: string): Promise<void>;
@@ -56,8 +58,8 @@ export interface IPage {
   getFormState(): Promise<any>;
   wait(options: number | WaitOptions): Promise<void>;
   tabs(): Promise<any>;
-  closeTab(index?: number): Promise<void>;
-  newTab(): Promise<void>;
+  closeTab?(index?: number): Promise<void>;
+  newTab?(): Promise<void>;
   selectTab(index: number): Promise<void>;
   networkRequests(includeStatic?: boolean): Promise<any>;
   consoleMessages(level?: string): Promise<any>;
@@ -67,16 +69,23 @@ export interface IPage {
   getInterceptedRequests(): Promise<any[]>;
   waitForCapture(timeout?: number): Promise<void>;
   screenshot(options?: ScreenshotOptions): Promise<string>;
+  startNetworkCapture?(pattern?: string): Promise<boolean>;
+  readNetworkCapture?(): Promise<unknown[]>;
   /**
    * Set local file paths on a file input element via CDP DOM.setFileInputFiles.
    * Chrome reads the files directly — no base64 encoding or payload size limits.
    */
   setFileInput?(files: string[], selector?: string): Promise<void>;
+  /**
+   * Insert text via native CDP Input.insertText into the currently focused element.
+   * Useful for rich editors that ignore synthetic DOM value/text mutations.
+   */
+  insertText?(text: string): Promise<void>;
   closeWindow?(): Promise<void>;
   /** Returns the current page URL, or null if unavailable. */
   getCurrentUrl?(): Promise<string | null>;
-  /** Returns the active tab ID, or undefined if not yet resolved. */
-  getActiveTabId?(): number | undefined;
+  /** Returns the active page identity (targetId), or undefined if not yet resolved. */
+  getActivePage?(): string | undefined;
   /** Send a raw CDP command via chrome.debugger passthrough. */
   cdp?(method: string, params?: Record<string, unknown>): Promise<unknown>;
   /** Click at native coordinates via CDP Input.dispatchMouseEvent. */

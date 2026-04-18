@@ -11,6 +11,10 @@ Browser adapter for [Doubao Chat](https://www.doubao.com/chat).
 | `opencli doubao send "..."` | Send a message to the current Doubao chat |
 | `opencli doubao read` | Read the visible Doubao conversation |
 | `opencli doubao ask "..."` | Send a prompt and wait for a reply |
+| `opencli doubao detail <id>` | 对话详情 |
+| `opencli doubao history` | 历史对话列表 |
+| `opencli doubao meeting-summary <id>` | 会议总结 |
+| `opencli doubao meeting-transcript <id>` | 会议记录 |
 
 ## Prerequisites
 

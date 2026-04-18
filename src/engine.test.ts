@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { discoverClis, discoverPlugins, ensureUserCliCompatShims, PLUGINS_DIR } from './discovery.js';
+import { discoverClis, discoverPlugins, ensureUserCliCompatShims, ensureUserAdapters, PLUGINS_DIR } from './discovery.js';
 import { executeCommand } from './execution.js';
 import { getRegistry, cli, Strategy } from './registry.js';
 import { clearAllHooks, onAfterExecute } from './hooks.js';
@@ -17,8 +17,8 @@ describe('discoverClis', () => {
   it('imports only CLI command modules during filesystem discovery', async () => {
     const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-discovery-'));
     const siteDir = path.join(tempRoot, 'temp-site');
-    const helperPath = path.join(siteDir, 'helper.ts');
-    const commandPath = path.join(siteDir, 'hello.ts');
+    const helperPath = path.join(siteDir, 'helper.js');
+    const commandPath = path.join(siteDir, 'hello.js');
 
     try {
       await fs.promises.mkdir(siteDir, { recursive: true });
@@ -38,13 +38,13 @@ cli({
 });
 `);
 
-      delete (globalThis as any).__opencli_helper_loaded__;
+      delete (globalThis as { __opencli_helper_loaded__?: unknown }).__opencli_helper_loaded__;
       await discoverClis(tempRoot);
 
-      expect((globalThis as any).__opencli_helper_loaded__).toBeUndefined();
+      expect((globalThis as { __opencli_helper_loaded__?: unknown }).__opencli_helper_loaded__).toBeUndefined();
       expect(getRegistry().get('temp-site/hello')).toBeDefined();
     } finally {
-      delete (globalThis as any).__opencli_helper_loaded__;
+      delete (globalThis as { __opencli_helper_loaded__?: unknown }).__opencli_helper_loaded__;
       await fs.promises.rm(tempRoot, { recursive: true, force: true });
     }
   });
@@ -53,7 +53,7 @@ cli({
     const tempBuildRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-manifest-fallback-'));
     const distDir = path.join(tempBuildRoot, 'dist');
     const siteDir = path.join(distDir, 'fallback-site');
-    const commandPath = path.join(siteDir, 'hello.ts');
+    const commandPath = path.join(siteDir, 'hello.js');
     const manifestPath = path.join(tempBuildRoot, 'cli-manifest.json');
 
     try {
@@ -79,18 +79,19 @@ cli({
     }
   });
 
-  it('loads legacy user TS CLI modules via compatibility shims', async () => {
+  it('loads user CLI modules via package exports symlink', async () => {
     const tempOpencliRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-user-clis-'));
     const userClisDir = path.join(tempOpencliRoot, 'clis');
     const siteDir = path.join(userClisDir, 'legacy-site');
-    const commandPath = path.join(siteDir, 'hello.ts');
+    const commandPath = path.join(siteDir, 'hello.js');
 
     try {
       await ensureUserCliCompatShims(tempOpencliRoot);
       await fs.promises.mkdir(siteDir, { recursive: true });
       await fs.promises.writeFile(commandPath, `
-import { cli, Strategy } from '../../registry';
-import { CommandExecutionError } from '../../errors';
+import { cli, Strategy } from '@jackwener/opencli/registry';
+import { CommandExecutionError } from '@jackwener/opencli/errors';
+import { htmlToMarkdown } from '@jackwener/opencli/utils';
 
 cli({
   site: 'legacy-site',
@@ -98,7 +99,7 @@ cli({
   description: 'hello command',
   strategy: Strategy.PUBLIC,
   browser: false,
-  func: async () => [{ ok: true, errorName: new CommandExecutionError('boom').name }],
+  func: async () => [{ ok: true, errorName: new CommandExecutionError('boom').name, markdown: htmlToMarkdown('<p>hello</p>') }],
 });
 `);
 
@@ -106,9 +107,37 @@ cli({
 
       const cmd = getRegistry().get('legacy-site/hello');
       expect(cmd).toBeDefined();
-      await expect(executeCommand(cmd!, {})).resolves.toEqual([{ ok: true, errorName: 'CommandExecutionError' }]);
+      await expect(executeCommand(cmd!, {})).resolves.toEqual([{ ok: true, errorName: 'CommandExecutionError', markdown: 'hello' }]);
     } finally {
       await fs.promises.rm(tempOpencliRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ensureUserAdapters', () => {
+  it('creates user clis directory without triggering full copy', async () => {
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-ensure-'));
+    const clisDir = path.join(tempDir, 'clis');
+    try {
+      // Patch USER_CLIS_DIR is not easy, so we test the function behavior indirectly:
+      // ensureUserAdapters should not throw and should be very fast (no fetch script)
+      const start = Date.now();
+      await ensureUserAdapters();
+      const elapsed = Date.now() - start;
+      // Should complete quickly (< 1s) since it only creates a directory
+      expect(elapsed).toBeLessThan(1000);
+    } finally {
+      await fs.promises.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('discoverClis handles empty user directory gracefully', async () => {
+    const emptyDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'opencli-empty-'));
+    try {
+      // Should not throw for an empty directory (no adapters to discover)
+      await expect(discoverClis(emptyDir)).resolves.not.toThrow();
+    } finally {
+      await fs.promises.rm(emptyDir, { recursive: true, force: true });
     }
   });
 });
@@ -127,8 +156,7 @@ describe('discoverPlugins', () => {
     try { await fs.promises.rm(brokenSymlinkDir, { recursive: true, force: true }); } catch {}
   });
 
-  it('discovers YAML plugins from ~/.opencli/plugins/', async () => {
-    // Create a simple YAML adapter in the plugins directory
+  it('ignores YAML files in plugin directories (YAML format removed)', async () => {
     await fs.promises.mkdir(testPluginDir, { recursive: true });
     await fs.promises.writeFile(yamlPath, `
 site: __test-plugin__
@@ -136,21 +164,13 @@ name: greeting
 description: Test plugin greeting
 strategy: public
 browser: false
-
-pipeline:
-  - evaluate: "() => [{ message: 'hello from plugin' }]"
-
-columns: [message]
 `);
 
     await discoverPlugins();
 
     const registry = getRegistry();
     const cmd = registry.get('__test-plugin__/greeting');
-    expect(cmd).toBeDefined();
-    expect(cmd!.site).toBe('__test-plugin__');
-    expect(cmd!.name).toBe('greeting');
-    expect(cmd!.description).toBe('Test plugin greeting');
+    expect(cmd).toBeUndefined();
   });
 
   it('handles non-existent plugins directory gracefully', async () => {
@@ -158,7 +178,7 @@ columns: [message]
     await expect(discoverPlugins()).resolves.not.toThrow();
   });
 
-  it('discovers YAML plugins from symlinked plugin directories', async () => {
+  it('ignores YAML files in symlinked plugin directories (YAML format removed)', async () => {
     await fs.promises.mkdir(PLUGINS_DIR, { recursive: true });
     await fs.promises.mkdir(symlinkTargetDir, { recursive: true });
     await fs.promises.writeFile(path.join(symlinkTargetDir, 'hello.yaml'), `
@@ -167,19 +187,13 @@ name: hello
 description: Test plugin greeting via symlink
 strategy: public
 browser: false
-
-pipeline:
-  - evaluate: "() => [{ message: 'hello from symlink plugin' }]"
-
-columns: [message]
 `);
     await fs.promises.symlink(symlinkTargetDir, symlinkPluginDir, 'dir');
 
     await discoverPlugins();
 
     const cmd = getRegistry().get('__test-plugin-symlink__/hello');
-    expect(cmd).toBeDefined();
-    expect(cmd!.description).toBe('Test plugin greeting via symlink');
+    expect(cmd).toBeUndefined();
   });
 
   it('skips broken plugin symlinks without throwing', async () => {

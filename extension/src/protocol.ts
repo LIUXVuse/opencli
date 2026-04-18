@@ -5,15 +5,28 @@
  * Everything else is just JS code sent via 'exec'.
  */
 
-export type Action = 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'cdp';
+export type Action =
+  | 'exec'
+  | 'navigate'
+  | 'tabs'
+  | 'cookies'
+  | 'screenshot'
+  | 'close-window'
+  | 'sessions'
+  | 'set-file-input'
+  | 'insert-text'
+  | 'bind-current'
+  | 'network-capture-start'
+  | 'network-capture-read'
+  | 'cdp';
 
 export interface Command {
   /** Unique request ID */
   id: string;
   /** Action type */
   action: Action;
-  /** Target tab ID (omit for active tab) */
-  tabId?: number;
+  /** Target page identity (targetId). Cross-layer contract with the daemon. */
+  page?: string;
   /** JS code to evaluate in page context (exec action) */
   code?: string;
   /** Logical workspace for automation session reuse */
@@ -26,6 +39,10 @@ export interface Command {
   index?: number;
   /** Cookie domain filter */
   domain?: string;
+  /** Optional hostname/domain to require for current-tab binding */
+  matchDomain?: string;
+  /** Optional pathname prefix to require for current-tab binding */
+  matchPathPrefix?: string;
   /** Screenshot format: png (default) or jpeg */
   format?: 'png' | 'jpeg';
   /** JPEG quality (0-100), only for jpeg format */
@@ -36,10 +53,18 @@ export interface Command {
   files?: string[];
   /** CSS selector for file input element (set-file-input action) */
   selector?: string;
+  /** Raw text payload for insert-text action */
+  text?: string;
+  /** URL substring filter pattern for network capture actions */
+  pattern?: string;
   /** CDP method name for 'cdp' action (e.g. 'Accessibility.getFullAXTree') */
   cdpMethod?: string;
   /** CDP method params for 'cdp' action */
   cdpParams?: Record<string, unknown>;
+  /** When true, automation windows are created in the foreground (focused) */
+  windowFocused?: boolean;
+  /** Custom idle timeout in seconds for this workspace session. Overrides the default. */
+  idleTimeout?: number;
 }
 
 export interface Result {
@@ -51,6 +76,8 @@ export interface Result {
   data?: unknown;
   /** Error message on failure */
   error?: string;
+  /** Page identity (targetId) — present only on page-scoped command responses */
+  page?: string;
 }
 
 /** Default daemon port */

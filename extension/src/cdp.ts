@@ -8,6 +8,27 @@
 
 const attached = new Set<number>();
 
+type NetworkCaptureEntry = {
+  kind: 'cdp';
+  url: string;
+  method: string;
+  requestHeaders?: Record<string, string>;
+  requestBodyKind?: string;
+  requestBodyPreview?: string;
+  responseStatus?: number;
+  responseContentType?: string;
+  responseHeaders?: Record<string, string>;
+  responsePreview?: string;
+  timestamp: number;
+};
+
+type NetworkCaptureState = {
+  patterns: string[];
+  entries: NetworkCaptureEntry[];
+  requestToIndex: Map<string, number>;
+};
+
+const networkCaptures = new Map<number, NetworkCaptureState>();
 /** Check if a URL can be attached via CDP — only allow http(s) and blank pages. */
 function isDebuggableUrl(url?: string): boolean {
   if (!url) return true;  // empty/undefined = tab still loading, allow it
@@ -45,8 +66,8 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
 
   // Retry attach up to 3 times — other extensions (1Password, Playwright MCP Bridge)
   // can temporarily interfere with chrome.debugger. A short delay usually resolves it.
-  // Normal commands: 2 retries, 500ms delay (fast fail for non-operate use)
-  // Operate commands: 5 retries, 1500ms delay (aggressive, tolerates extension interference)
+  // Normal commands: 2 retries, 500ms delay (fast fail for non-browser use)
+  // Browser commands: 5 retries, 1500ms delay (aggressive, tolerates extension interference)
   const MAX_ATTACH_RETRIES = aggressiveRetry ? 5 : 2;
   const RETRY_DELAY_MS = aggressiveRetry ? 1500 : 500;
   let lastError = '';
@@ -71,14 +92,26 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
             break; // Don't retry if URL became un-debuggable
           }
         } catch {
+          // Tab is gone — don't fail early here.
+          // Later retry layers can re-resolve a fresh automation tab/window.
           lastError = `Tab ${tabId} no longer exists`;
-          break;
+          // Don't break; fall through to retry
         }
       }
     }
   }
 
   if (lastError) {
+    // Log detailed diagnostics for debugging extension conflicts
+    let finalUrl = 'unknown';
+    let finalWindowId = 'unknown';
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      finalUrl = tab.url ?? 'undefined';
+      finalWindowId = String(tab.windowId);
+    } catch { /* tab gone */ }
+    console.warn(`[opencli] attach failed for tab ${tabId}: url=${finalUrl}, windowId=${finalWindowId}, error=${lastError}`);
+
     const hint = lastError.includes('chrome-extension://')
       ? '. Tip: another Chrome extension may be interfering — try disabling other extensions'
       : '';
@@ -95,7 +128,7 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
 
 export async function evaluate(tabId: number, expression: string, aggressiveRetry: boolean = false): Promise<unknown> {
   // Retry the entire evaluate (attach + command).
-  // Normal: 2 retries. Operate: 3 retries (tolerates extension interference).
+  // Normal: 2 retries. Browser: 3 retries (tolerates extension interference).
   const MAX_EVAL_RETRIES = aggressiveRetry ? 3 : 2;
   for (let attempt = 1; attempt <= MAX_EVAL_RETRIES; attempt++) {
     try {
@@ -121,11 +154,14 @@ export async function evaluate(tabId: number, expression: string, aggressiveRetr
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // Only retry on attach/debugger errors, not on JS eval errors
-      const isAttachError = msg.includes('attach failed') || msg.includes('Debugger is not attached')
-        || msg.includes('chrome-extension://') || msg.includes('Target closed');
+      const isNavigateError = msg.includes('Inspected target navigated') || msg.includes('Target closed');
+      const isAttachError = isNavigateError || msg.includes('attach failed') || msg.includes('Debugger is not attached')
+        || msg.includes('chrome-extension://');
       if (isAttachError && attempt < MAX_EVAL_RETRIES) {
         attached.delete(tabId); // Force re-attach on next attempt
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // SPA navigations recover quickly; debugger detach needs longer
+        const retryMs = isNavigateError ? 200 : 500;
+        await new Promise(resolve => setTimeout(resolve, retryMs));
         continue;
       }
       throw e;
@@ -228,23 +264,183 @@ export async function setFileInputFiles(
   });
 }
 
+export async function insertText(
+  tabId: number,
+  text: string,
+): Promise<void> {
+  await ensureAttached(tabId);
+  await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', { text });
+}
+
+function normalizeCapturePatterns(pattern?: string): string[] {
+  return String(pattern || '')
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function shouldCaptureUrl(url: string | undefined, patterns: string[]): boolean {
+  if (!url) return false;
+  if (!patterns.length) return true;
+  return patterns.some((pattern) => url.includes(pattern));
+}
+
+function normalizeHeaders(headers: unknown): Record<string, string> {
+  if (!headers || typeof headers !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+    out[String(key)] = String(value);
+  }
+  return out;
+}
+
+function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallback?: {
+  url?: string;
+  method?: string;
+  requestHeaders?: Record<string, string>;
+}): NetworkCaptureEntry | null {
+  const state = networkCaptures.get(tabId);
+  if (!state) return null;
+  const existingIndex = state.requestToIndex.get(requestId);
+  if (existingIndex !== undefined) {
+    return state.entries[existingIndex] || null;
+  }
+  const url = fallback?.url || '';
+  if (!shouldCaptureUrl(url, state.patterns)) return null;
+  const entry: NetworkCaptureEntry = {
+    kind: 'cdp',
+    url,
+    method: fallback?.method || 'GET',
+    requestHeaders: fallback?.requestHeaders || {},
+    timestamp: Date.now(),
+  };
+  state.entries.push(entry);
+  state.requestToIndex.set(requestId, state.entries.length - 1);
+  return entry;
+}
+
+export async function startNetworkCapture(
+  tabId: number,
+  pattern?: string,
+): Promise<void> {
+  await ensureAttached(tabId);
+  await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
+  networkCaptures.set(tabId, {
+    patterns: normalizeCapturePatterns(pattern),
+    entries: [],
+    requestToIndex: new Map(),
+  });
+}
+
+export async function readNetworkCapture(tabId: number): Promise<NetworkCaptureEntry[]> {
+  const state = networkCaptures.get(tabId);
+  if (!state) return [];
+  const entries = state.entries.slice();
+  state.entries = [];
+  state.requestToIndex.clear();
+  return entries;
+}
+
+export function hasActiveNetworkCapture(tabId: number): boolean {
+  return networkCaptures.has(tabId);
+}
+
 export async function detach(tabId: number): Promise<void> {
   if (!attached.has(tabId)) return;
   attached.delete(tabId);
+  networkCaptures.delete(tabId);
   try { await chrome.debugger.detach({ tabId }); } catch { /* ignore */ }
 }
 
 export function registerListeners(): void {
   chrome.tabs.onRemoved.addListener((tabId) => {
     attached.delete(tabId);
+    networkCaptures.delete(tabId);
   });
   chrome.debugger.onDetach.addListener((source) => {
-    if (source.tabId) attached.delete(source.tabId);
+    if (source.tabId) {
+      attached.delete(source.tabId);
+      networkCaptures.delete(source.tabId);
+    }
   });
   // Invalidate attached cache when tab URL changes to non-debuggable
   chrome.tabs.onUpdated.addListener(async (tabId, info) => {
     if (info.url && !isDebuggableUrl(info.url)) {
       await detach(tabId);
+    }
+  });
+  chrome.debugger.onEvent.addListener(async (source, method, params) => {
+    const tabId = source.tabId;
+    if (!tabId) return;
+    const state = networkCaptures.get(tabId);
+    if (!state) return;
+
+    if (method === 'Network.requestWillBeSent') {
+      const requestId = String(params?.requestId || '');
+      const request = params?.request as {
+        url?: string;
+        method?: string;
+        headers?: Record<string, unknown>;
+        postData?: string;
+        hasPostData?: boolean;
+      } | undefined;
+      const entry = getOrCreateNetworkCaptureEntry(tabId, requestId, {
+        url: request?.url,
+        method: request?.method,
+        requestHeaders: normalizeHeaders(request?.headers),
+      });
+      if (!entry) return;
+      entry.requestBodyKind = request?.hasPostData ? 'string' : 'empty';
+      entry.requestBodyPreview = String(request?.postData || '').slice(0, 4000);
+      try {
+        const postData = await chrome.debugger.sendCommand({ tabId }, 'Network.getRequestPostData', { requestId }) as { postData?: string };
+        if (postData?.postData) {
+          entry.requestBodyKind = 'string';
+          entry.requestBodyPreview = postData.postData.slice(0, 4000);
+        }
+      } catch {
+        // Optional; some requests do not expose postData.
+      }
+      return;
+    }
+
+    if (method === 'Network.responseReceived') {
+      const requestId = String(params?.requestId || '');
+      const response = params?.response as {
+        url?: string;
+        mimeType?: string;
+        status?: number;
+        headers?: Record<string, unknown>;
+      } | undefined;
+      const entry = getOrCreateNetworkCaptureEntry(tabId, requestId, {
+        url: response?.url,
+      });
+      if (!entry) return;
+      entry.responseStatus = response?.status;
+      entry.responseContentType = response?.mimeType || '';
+      entry.responseHeaders = normalizeHeaders(response?.headers);
+      return;
+    }
+
+    if (method === 'Network.loadingFinished') {
+      const requestId = String(params?.requestId || '');
+      const stateEntryIndex = state.requestToIndex.get(requestId);
+      if (stateEntryIndex === undefined) return;
+      const entry = state.entries[stateEntryIndex];
+      if (!entry) return;
+      try {
+        const body = await chrome.debugger.sendCommand({ tabId }, 'Network.getResponseBody', { requestId }) as {
+          body?: string;
+          base64Encoded?: boolean;
+        };
+        if (typeof body?.body === 'string') {
+          entry.responsePreview = body.base64Encoded
+            ? `base64:${body.body.slice(0, 4000)}`
+            : body.body.slice(0, 4000);
+        }
+      } catch {
+        // Optional; bodies are unavailable for some requests (e.g. uploads).
+      }
     }
   });
 }

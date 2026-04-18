@@ -4,99 +4,118 @@
  * All browser operations are ultimately 'exec' (JS evaluation via CDP)
  * plus a few native Chrome Extension APIs (tabs, cookies, navigate).
  *
- * IMPORTANT: After goto(), we remember the tabId returned by the navigate
- * action and pass it to all subsequent commands. This avoids the issue
- * where resolveTabId() in the extension picks a chrome:// or
- * chrome-extension:// tab that can't be debugged.
+ * IMPORTANT: After goto(), we remember the page identity (targetId) returned
+ * by the navigate action and pass it to all subsequent commands. This ensures
+ * page-scoped operations target the correct page without guessing.
  */
 
 import type { BrowserCookie, ScreenshotOptions } from '../types.js';
-import { sendCommand } from './daemon-client.js';
+import { sendCommand, sendCommandFull } from './daemon-client.js';
 import { wrapForEval } from './utils.js';
 import { saveBase64ToFile } from '../utils.js';
 import { generateStealthJs } from './stealth.js';
 import { waitForDomStableJs } from './dom-helpers.js';
 import { BasePage } from './base-page.js';
+import { classifyBrowserError } from './errors.js';
+import { log } from '../logger.js';
 
-export function isRetryableSettleError(err: unknown): boolean {
+function isUnsupportedNetworkCaptureError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return message.includes('Inspected target navigated or closed')
-    || (message.includes('-32000') && message.toLowerCase().includes('target'));
+  const normalized = message.toLowerCase();
+  return (normalized.includes('unknown action') && normalized.includes('network-capture'))
+    || (normalized.includes('network capture') && normalized.includes('not supported'));
 }
 
 /**
  * Page — implements IPage by talking to the daemon via HTTP.
  */
 export class Page extends BasePage {
-  constructor(private readonly workspace: string = 'default') {
+  private readonly _idleTimeout: number | undefined;
+
+  constructor(private readonly workspace: string = 'default', idleTimeout?: number) {
     super();
+    this._idleTimeout = idleTimeout;
   }
 
-  /** Active tab ID, set after navigate and used in all subsequent commands */
-  private _tabId: number | undefined;
+  /** Active page identity (targetId), set after navigate and used in all subsequent commands */
+  private _page: string | undefined;
+  private _networkCaptureUnsupported = false;
+  private _networkCaptureWarned = false;
 
   /** Helper: spread workspace into command params */
-  private _wsOpt(): { workspace: string } {
-    return { workspace: this.workspace };
+  private _wsOpt(): { workspace: string; idleTimeout?: number } {
+    return { workspace: this.workspace, ...(this._idleTimeout != null && { idleTimeout: this._idleTimeout }) };
   }
 
-  /** Helper: spread workspace + tabId into command params */
+  /** Helper: spread workspace + page identity into command params */
   private _cmdOpts(): Record<string, unknown> {
     return {
       workspace: this.workspace,
-      ...(this._tabId !== undefined && { tabId: this._tabId }),
+      ...(this._page !== undefined && { page: this._page }),
+      ...(this._idleTimeout != null && { idleTimeout: this._idleTimeout }),
     };
   }
 
   async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void> {
-    const result = await sendCommand('navigate', {
+    const result = await sendCommandFull('navigate', {
       url,
       ...this._cmdOpts(),
-    }) as { tabId?: number };
-    // Remember the tabId and URL for subsequent calls
-    if (result?.tabId) {
-      this._tabId = result.tabId;
+    });
+    // Remember the page identity (targetId) for subsequent calls
+    if (result.page) {
+      this._page = result.page;
     }
     this._lastUrl = url;
-    // Inject stealth anti-detection patches (guard flag prevents double-injection).
-    try {
-      await sendCommand('exec', {
-        code: generateStealthJs(),
-        ...this._cmdOpts(),
-      });
-    } catch {
-      // Non-fatal: stealth is best-effort
-    }
-    // Smart settle: use DOM stability detection instead of fixed sleep.
-    // settleMs is now a timeout cap (default 1000ms), not a fixed wait.
+    // Inject stealth + settle in a single round-trip instead of two sequential exec calls.
+    // The stealth guard flag prevents double-injection; settle uses DOM stability detection.
     if (options?.waitUntil !== 'none') {
       const maxMs = options?.settleMs ?? 1000;
-      const settleOpts = {
-        code: waitForDomStableJs(maxMs, Math.min(500, maxMs)),
+      const combinedCode = `${generateStealthJs()};\n${waitForDomStableJs(maxMs, Math.min(500, maxMs))}`;
+      const combinedOpts = {
+        code: combinedCode,
         ...this._cmdOpts(),
       };
       try {
-        await sendCommand('exec', settleOpts);
+        await sendCommand('exec', combinedOpts);
       } catch (err) {
-        if (!isRetryableSettleError(err)) throw err;
-        // SPA client-side redirects can invalidate the CDP target after
-        // chrome.tabs reports 'complete'. Wait briefly for the new document
-        // to load, then retry the settle probe once.
+        const advice = classifyBrowserError(err);
+        // Only settle-retry on target navigation (SPA client-side redirects).
+        // Extension/daemon errors are already retried by sendCommandRaw —
+        // retrying them here would silently swallow real failures.
+        if (advice.kind !== 'target-navigation') throw err;
         try {
-          await new Promise((r) => setTimeout(r, 200));
-          await sendCommand('exec', settleOpts);
+          await new Promise((r) => setTimeout(r, advice.delayMs));
+          await sendCommand('exec', combinedOpts);
         } catch (retryErr) {
-          if (!isRetryableSettleError(retryErr)) throw retryErr;
-          // Retry also failed — give up silently. Settle is best-effort
-          // after successful navigation; the next real command will surface
-          // any persistent target error immediately.
+          if (classifyBrowserError(retryErr).kind !== 'target-navigation') throw retryErr;
         }
+      }
+    } else {
+      // Even with waitUntil='none', still inject stealth (best-effort)
+      try {
+        await sendCommand('exec', {
+          code: generateStealthJs(),
+          ...this._cmdOpts(),
+        });
+      } catch {
+        // Non-fatal: stealth is best-effort
       }
     }
   }
 
-  getActiveTabId(): number | undefined {
-    return this._tabId;
+  /** Get the active page identity (targetId) */
+  getActivePage(): string | undefined {
+    return this._page;
+  }
+
+  private _markUnsupportedNetworkCapture(): void {
+    this._networkCaptureUnsupported = true;
+    if (this._networkCaptureWarned) return;
+    this._networkCaptureWarned = true;
+    log.warn(
+      'Browser Bridge extension does not support network capture; continuing without it. ' +
+      'Explore output may miss API endpoints until you reload or reinstall the extension.',
+    );
   }
 
   async evaluate(js: string): Promise<unknown> {
@@ -104,8 +123,9 @@ export class Page extends BasePage {
     try {
       return await sendCommand('exec', { code, ...this._cmdOpts() });
     } catch (err) {
-      if (!isRetryableSettleError(err)) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      const advice = classifyBrowserError(err);
+      if (advice.kind !== 'target-navigation') throw err;
+      await new Promise((resolve) => setTimeout(resolve, advice.delayMs));
       return sendCommand('exec', { code, ...this._cmdOpts() });
     }
   }
@@ -121,6 +141,11 @@ export class Page extends BasePage {
       await sendCommand('close-window', { ...this._wsOpt() });
     } catch {
       // Window may already be closed or daemon may be down
+    } finally {
+      this._page = undefined;
+      this._lastUrl = null;
+      this._networkCaptureUnsupported = false;
+      this._networkCaptureWarned = false;
     }
   }
 
@@ -129,21 +154,9 @@ export class Page extends BasePage {
     return Array.isArray(result) ? result : [];
   }
 
-  async closeTab(index?: number): Promise<void> {
-    await sendCommand('tabs', { op: 'close', ...this._wsOpt(), ...(index !== undefined ? { index } : {}) });
-    // Invalidate cached tabId — the closed tab might have been our active one.
-    // We can't know for sure (close-by-index doesn't return tabId), so reset.
-    this._tabId = undefined;
-  }
-
-  async newTab(): Promise<void> {
-    const result = await sendCommand('tabs', { op: 'new', ...this._wsOpt() }) as { tabId?: number };
-    if (result?.tabId) this._tabId = result.tabId;
-  }
-
   async selectTab(index: number): Promise<void> {
-    const result = await sendCommand('tabs', { op: 'select', index, ...this._wsOpt() }) as { selected?: number };
-    if (result?.selected) this._tabId = result.selected;
+    const result = await sendCommandFull('tabs', { op: 'select', index, ...this._wsOpt() });
+    if (result.page) this._page = result.page;
   }
 
   /**
@@ -164,6 +177,34 @@ export class Page extends BasePage {
     return base64;
   }
 
+  async startNetworkCapture(pattern: string = ''): Promise<boolean> {
+    if (this._networkCaptureUnsupported) return false;
+    try {
+      await sendCommand('network-capture-start', {
+        pattern,
+        ...this._cmdOpts(),
+      });
+      return true;
+    } catch (err) {
+      if (!isUnsupportedNetworkCaptureError(err)) throw err;
+      this._markUnsupportedNetworkCapture();
+      return false;
+    }
+  }
+
+  async readNetworkCapture(): Promise<unknown[]> {
+    if (this._networkCaptureUnsupported) return [];
+    try {
+      const result = await sendCommand('network-capture-read', {
+        ...this._cmdOpts(),
+      });
+      return Array.isArray(result) ? result : [];
+    } catch (err) {
+      if (!isUnsupportedNetworkCaptureError(err)) throw err;
+      this._markUnsupportedNetworkCapture();
+      return [];
+    }
+  }
   /**
    * Set local file paths on a file input element via CDP DOM.setFileInputFiles.
    * Chrome reads the files directly from the local filesystem, avoiding the
@@ -180,12 +221,94 @@ export class Page extends BasePage {
     }
   }
 
+  async insertText(text: string): Promise<void> {
+    const result = await sendCommand('insert-text', {
+      text,
+      ...this._cmdOpts(),
+    }) as { inserted?: boolean };
+    if (!result?.inserted) {
+      throw new Error('insertText returned no inserted flag — command may not be supported by the extension');
+    }
+  }
+
   async cdp(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     return sendCommand('cdp', {
       cdpMethod: method,
       cdpParams: params,
       ...this._cmdOpts(),
     });
+  }
+
+  /** CDP native click fallback — called when JS el.click() fails */
+  protected override async tryNativeClick(x: number, y: number): Promise<boolean> {
+    try {
+      await this.nativeClick(x, y);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Precise click using DOM.getContentQuads/getBoxModel for inline elements */
+  async clickWithQuads(ref: string): Promise<void> {
+    const safeRef = JSON.stringify(ref);
+    const cssSelector = `[data-opencli-ref="${ref.replace(/"/g, '\\"')}"]`;
+
+    // Scroll element into view first
+    await this.evaluate(`
+      (() => {
+        const el = document.querySelector('[data-opencli-ref="' + ${safeRef} + '"]');
+        if (el) el.scrollIntoView({ behavior: 'instant', block: 'center' });
+        return !!el;
+      })()
+    `);
+
+    try {
+      // Find DOM node via CDP
+      const doc = await this.cdp('DOM.getDocument', {}) as { root: { nodeId: number } };
+      const result = await this.cdp('DOM.querySelectorAll', {
+        nodeId: doc.root.nodeId,
+        selector: cssSelector,
+      }) as { nodeIds: number[] };
+
+      if (!result.nodeIds?.length) throw new Error('DOM node not found');
+
+      const nodeId = result.nodeIds[0];
+
+      // Try getContentQuads first (precise for inline elements)
+      try {
+        const quads = await this.cdp('DOM.getContentQuads', { nodeId }) as { quads: number[][] };
+        if (quads.quads?.length) {
+          const q = quads.quads[0];
+          const cx = (q[0] + q[2] + q[4] + q[6]) / 4;
+          const cy = (q[1] + q[3] + q[5] + q[7]) / 4;
+          await this.nativeClick(Math.round(cx), Math.round(cy));
+          return;
+        }
+      } catch { /* fallthrough */ }
+
+      // Try getBoxModel
+      try {
+        const box = await this.cdp('DOM.getBoxModel', { nodeId }) as { model: { content: number[] } };
+        if (box.model?.content) {
+          const c = box.model.content;
+          const cx = (c[0] + c[2] + c[4] + c[6]) / 4;
+          const cy = (c[1] + c[3] + c[5] + c[7]) / 4;
+          await this.nativeClick(Math.round(cx), Math.round(cy));
+          return;
+        }
+      } catch { /* fallthrough */ }
+    } catch { /* fallthrough */ }
+
+    // Final fallback: regular click
+    await this.evaluate(`
+      (() => {
+        const el = document.querySelector('[data-opencli-ref="' + ${safeRef} + '"]');
+        if (!el) throw new Error('Element not found: ' + ${safeRef});
+        el.click();
+        return 'clicked';
+      })()
+    `);
   }
 
   async nativeClick(x: number, y: number): Promise<void> {
@@ -228,4 +351,3 @@ export class Page extends BasePage {
     });
   }
 }
-

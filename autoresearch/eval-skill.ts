@@ -2,7 +2,7 @@
 /**
  * Layer 2: Claude Code Skill E2E Testing (LLM Judge)
  *
- * Spawns Claude Code with the opencli-operate skill. Claude Code
+ * Spawns Claude Code with the opencli-browser skill. Claude Code
  * completes the task using browse commands AND judges its own result.
  *
  * Task format: YAML with judge_context (multi-criteria, like Browser Use)
@@ -18,9 +18,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const TASKS_FILE = join(__dirname, 'skill-tasks.yaml');
 const RESULTS_DIR = join(__dirname, 'results');
-const SKILL_PATH = join(__dirname, '..', 'skills', 'opencli-operate', 'SKILL.md');
+const SKILL_PATH = join(__dirname, '..', 'skills', 'opencli-browser', 'SKILL.md');
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -101,7 +100,7 @@ function runSkillTask(task: SkillTask): TaskResult {
   const urlPart = task.url ? ` Start URL: ${task.url}` : '';
   const criteria = task.judge_context.map((c, i) => `${i + 1}. ${c}`).join('\n');
 
-  const prompt = `Complete this browser task using opencli operate commands:
+  const prompt = `Complete this browser task using opencli browser commands:
 
 TASK: ${task.task}${urlPart}
 
@@ -111,7 +110,7 @@ ${criteria}
 At the very end of your response, output a JSON verdict on its own line:
 {"success": true/false, "explanation": "brief explanation"}
 
-Always close the browser with 'opencli operate close' when done.`;
+Always close the browser with 'opencli browser close' when done.`;
 
   try {
     const output = execSync(
@@ -160,13 +159,20 @@ Always close the browser with 'opencli operate close' when done.`;
 }
 
 function extractVerdict(text: string): { success: boolean; explanation: string } {
-  // Try to find {"success": ...} JSON in the text
-  const jsonMatches = text.match(/\{"success"\s*:\s*(true|false)\s*,\s*"explanation"\s*:\s*"([^"]*)"\s*\}/g);
-  if (jsonMatches) {
-    const last = jsonMatches[jsonMatches.length - 1];
-    try {
-      return JSON.parse(last);
-    } catch { /* fall through */ }
+  // Try to find and parse {"success": ...} JSON from the last occurrence
+  const idx = text.lastIndexOf('{"success"');
+  if (idx !== -1) {
+    // Find the matching closing brace (handle escaped quotes in explanation)
+    const sub = text.slice(idx);
+    let braceCount = 0;
+    let end = -1;
+    for (let i = 0; i < sub.length; i++) {
+      if (sub[i] === '{') braceCount++;
+      else if (sub[i] === '}') { braceCount--; if (braceCount === 0) { end = i + 1; break; } }
+    }
+    if (end > 0) {
+      try { return JSON.parse(sub.slice(0, end)); } catch { /* fall through */ }
+    }
   }
 
   // Fallback: check for success indicators in text

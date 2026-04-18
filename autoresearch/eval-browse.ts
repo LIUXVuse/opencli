@@ -2,7 +2,7 @@
 /**
  * Layer 1: Deterministic Browse Command Testing
  *
- * Runs predefined opencli operate command sequences against real websites.
+ * Runs predefined opencli browser command sequences against real websites.
  * No LLM involved — tests command reliability only.
  *
  * Usage:
@@ -76,7 +76,7 @@ function runCommand(cmd: string): string {
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
   } catch (err: any) {
-    return err.stdout?.trim() ?? '';
+    return err.stdout?.trim() || err.stderr?.trim() || '';
   }
 }
 
@@ -137,12 +137,12 @@ function main() {
 
     // Close browser between tasks for clean state
     if (i < tasks.length - 1) {
-      try { runCommand('opencli operate close'); } catch { /* ignore */ }
+      try { runCommand('opencli browser close'); } catch { /* ignore */ }
     }
   }
 
   // Final close
-  try { runCommand('opencli operate close'); } catch { /* ignore */ }
+  try { runCommand('opencli browser close'); } catch { /* ignore */ }
 
   // Summary
   const trainResults = results.filter(r => r.set === 'train');

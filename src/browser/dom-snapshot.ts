@@ -377,6 +377,8 @@ export function generateSnapshotJs(opts: DomSnapshotOptions = {}): string {
     if (role && INTERACTIVE_ROLES.has(role)) return true;
     if (el.hasAttribute('onclick') || el.hasAttribute('onmousedown') || el.hasAttribute('ontouchstart')) return true;
     if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
+    // Framework event listener detection (React/Vue/Angular onClick)
+    if (hasFrameworkListener(el)) return true;
     try { if (window.getComputedStyle(el).cursor === 'pointer') return true; } catch {}
     if (el.isContentEditable && el.getAttribute('contenteditable') !== 'false') return true;
     // Search element heuristic detection
@@ -384,9 +386,29 @@ export function generateSnapshotJs(opts: DomSnapshotOptions = {}): string {
     return false;
   }
 
+  function hasFrameworkListener(el) {
+    try {
+      // React: __reactProps$xxx / __reactEvents$xxx with onClick/onMouseDown
+      for (const key of Object.keys(el)) {
+        if (key.startsWith('__reactProps$') || key.startsWith('__reactEvents$')) {
+          const props = el[key];
+          if (props && (props.onClick || props.onMouseDown || props.onPointerDown)) return true;
+        }
+      }
+      // Vue 3: _vei (Vue Event Invoker) with onClick
+      if (el._vei && (el._vei.onClick || el._vei.click || el._vei.onMousedown)) return true;
+      // Vue 2: __vue__ instance with $listeners
+      if (el.__vue__?.$listeners?.click) return true;
+      // Angular: ng-reflect-click binding
+      if (el.hasAttribute('ng-reflect-click')) return true;
+    } catch { /* ignore errors from cross-origin or frozen objects */ }
+    return false;
+  }
+
   function isSearchElement(el) {
     // Check class names for search indicators
-    const className = el.className?.toLowerCase() || '';
+    // Note: SVG elements have className as SVGAnimatedString (not a string), use baseVal
+    const className = (typeof el.className === 'string' ? el.className : el.className?.baseVal || '').toLowerCase();
     const classes = className.split(/\\s+/).filter(Boolean);
     for (const cls of classes) {
       const cleaned = cls.replace(/[^a-z0-9-]/g, '');
@@ -594,6 +616,7 @@ export function generateSnapshotJs(opts: DomSnapshotOptions = {}): string {
   const lines = [];
   const hiddenInteractives = [];
   const currentHashes = [];
+  const refIdentity = {};
   let iframeCount = 0;
 
   function walk(el, depth, parentPropagatingRect) {
@@ -728,11 +751,20 @@ export function generateSnapshotJs(opts: DomSnapshotOptions = {}): string {
     // Scroll marker
     if (isScrollable && !interactive) line += '|scroll|';
 
-    // Interactive index + data-ref
+    // Interactive index + data-ref + fingerprint
     if (interactive) {
       interactiveIndex++;
       if (ANNOTATE_REFS) el.setAttribute('data-opencli-ref', '' + interactiveIndex);
       line += isScrollable ? '|scroll[' + interactiveIndex + ']|' : '[' + interactiveIndex + ']';
+      // Store fingerprint for stale-ref detection
+      refIdentity['' + interactiveIndex] = {
+        tag: tag,
+        role: el.getAttribute('role') || '',
+        text: (el.textContent || '').trim().slice(0, 30),
+        ariaLabel: el.getAttribute('aria-label') || '',
+        id: el.id || '',
+        testId: el.getAttribute('data-testid') || el.getAttribute('data-test') || '',
+      };
     }
 
     // Tag + attributes
@@ -816,6 +848,8 @@ export function generateSnapshotJs(opts: DomSnapshotOptions = {}): string {
 
   // Store hashes on window for next diff snapshot
   try { window.__opencli_prev_hashes = JSON.stringify(currentHashes); } catch {}
+  // Store ref identity map for stale-ref detection by target resolver
+  try { window.__opencli_ref_identity = refIdentity; } catch {}
 
   return lines.join('\\n');
 })()
