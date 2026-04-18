@@ -108,8 +108,21 @@ export default {
           }
         }
 
-        const minDailyGb = parseFloat(url.searchParams.get('min_daily_gb') ?? '3');
-        const plans = await fetchAndRankSimCards({ country, minDays, maxDays, simType, noRealName, limit, minDailyGb: isNaN(minDailyGb) ? 3 : minDailyGb });
+        // 自動降級：先試 3GB，沒結果降 1GB，再沒結果全開（同一批資料，不重複打 API）
+        const fallbacks = [3, 1, 0];
+        let plans = await fetchAndRankSimCards({ country, minDays, maxDays, simType, noRealName, limit: 50, minDailyGb: 0 });
+        let actualMinGb = 0;
+        for (const threshold of fallbacks) {
+          const filtered = plans.filter(p => {
+            const gb = parseFloat(p.daily_gb);
+            return isNaN(gb) || gb >= threshold;
+          });
+          if (filtered.length > 0 || threshold === 0) {
+            plans = filtered.slice(0, limit).map((p, i) => ({ ...p, rank: i + 1 }));
+            actualMinGb = threshold;
+            break;
+          }
+        }
         return json({ country, days: daysParam ?? null, total: plans.length, plans });
       } catch (e) {
         return error(`SIM 卡查詢失敗：${(e as Error).message}`);
