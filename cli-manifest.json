@@ -3250,7 +3250,7 @@
       {
         "name": "op",
         "type": "str",
-        "default": "/Users/jakevin/Pictures/chatgpt",
+        "default": "/Users/liu/Pictures/chatgpt",
         "required": false,
         "help": "Output directory"
       },
@@ -6012,6 +6012,107 @@
     "navigateBefore": "https://www.facebook.com"
   },
   {
+    "site": "forex",
+    "name": "best",
+    "description": "多國換錢策略一覽：台灣直換 vs 帶美金去當地換，找出最划算路線",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "amount",
+        "type": "int",
+        "default": 10000,
+        "required": false,
+        "help": "台幣金額（預設 10,000）"
+      }
+    ],
+    "columns": [
+      "幣別",
+      "名稱",
+      "方案A 直換",
+      "方案B 帶USD換(實際)",
+      "差距",
+      "推薦換匯地點"
+    ],
+    "type": "js",
+    "modulePath": "../dist/src/clis/forex/best.js",
+    "sourceFile": "../dist/src/clis/forex/best.js"
+  },
+  {
+    "site": "forex",
+    "name": "compare",
+    "description": "橫向比較多家台灣銀行的現鈔賣出匯率，找出最划算的換匯銀行",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "currency",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "幣別代碼（如 VND、THB、USD、JPY）"
+      },
+      {
+        "name": "amount",
+        "type": "int",
+        "default": 10000,
+        "required": false,
+        "help": "台幣金額，用於計算能換多少外幣（預設 10,000）"
+      }
+    ],
+    "columns": [
+      "銀行",
+      "匯率(TWD/1外幣)",
+      "能換到",
+      "差距",
+      "備註"
+    ],
+    "type": "js",
+    "modulePath": "../dist/src/clis/forex/compare.js",
+    "sourceFile": "../dist/src/clis/forex/compare.js"
+  },
+  {
+    "site": "forex",
+    "name": "rate",
+    "description": "查詢台灣銀行即時匯率，附各國換錢策略與最優銀行建議",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "currency",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "幣別代碼（如 VND、THB、USD），不填則顯示旅遊常用幣別"
+      },
+      {
+        "name": "amount",
+        "type": "int",
+        "default": 10000,
+        "required": false,
+        "help": "台幣金額，用於計算能換多少外幣（預設 10,000）"
+      },
+      {
+        "name": "no-strategy",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "不顯示換錢策略建議"
+      }
+    ],
+    "columns": [
+      "幣別",
+      "名稱",
+      "現鈔賣出(TWD)",
+      "能換到",
+      "現鈔買入(TWD)",
+      "來源"
+    ],
+    "type": "js",
+    "modulePath": "../dist/src/clis/forex/rate.js",
+    "sourceFile": "../dist/src/clis/forex/rate.js"
+  },
+  {
     "site": "gemini",
     "name": "ask",
     "description": "Send a prompt to Gemini and return only the assistant response",
@@ -6169,7 +6270,7 @@
       {
         "name": "op",
         "type": "str",
-        "default": "/Users/jakevin/tmp/gemini-images",
+        "default": "/Users/liu/tmp/gemini-images",
         "required": false,
         "help": "Output directory shorthand"
       },
@@ -7450,7 +7551,7 @@
       {
         "name": "path",
         "type": "str",
-        "default": "/Users/jakevin/Downloads/Instagram",
+        "default": "/Users/liu/Downloads/Instagram",
         "required": false,
         "help": "Download directory"
       }
@@ -14634,6 +14735,86 @@
     "modulePath": "tiktok/user.js",
     "sourceFile": "tiktok/user.js",
     "navigateBefore": "https://www.tiktok.com"
+  },
+  {
+    "site": "trip",
+    "name": "sim-rank",
+    "aliases": [
+      "sim",
+      "simrank"
+    ],
+    "description": "查詢 trip.com SIM 卡方案並依 CP 值排名（預設：越南）",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "country",
+        "type": "str",
+        "default": "Vietnam",
+        "required": false,
+        "help": "查詢的國家名稱（英文），例如：Vietnam, Japan, Thailand"
+      },
+      {
+        "name": "days",
+        "type": "str",
+        "required": false,
+        "help": "查詢天數，支援單一天數或範圍，例如：7、7-9、10-14"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 20,
+        "required": false,
+        "help": "顯示筆數（最多 50）"
+      },
+      {
+        "name": "sim_type",
+        "type": "str",
+        "default": "all",
+        "required": false,
+        "help": "SIM 卡類型：all（全部）、esim（純 eSIM）、physical（實體卡）",
+        "choices": [
+          "all",
+          "esim",
+          "physical"
+        ]
+      },
+      {
+        "name": "sort",
+        "type": "str",
+        "default": "cp",
+        "required": false,
+        "help": "排序方式：cp（CP 值，預設）、price（價格低→高）、name（名稱）",
+        "choices": [
+          "cp",
+          "price",
+          "name"
+        ]
+      },
+      {
+        "name": "no_real_name",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "只顯示不需要實名制的方案"
+      }
+    ],
+    "columns": [
+      "rank",
+      "name",
+      "type",
+      "plan",
+      "days",
+      "daily_gb",
+      "min_price_usd",
+      "formula",
+      "cp_score",
+      "real_name_req",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "../dist/src/clis/trip/sim-rank.js",
+    "sourceFile": "../dist/src/clis/trip/sim-rank.js"
   },
   {
     "site": "twitter",

@@ -175,6 +175,34 @@ export async function buildManifest(): Promise<ManifestEntry[]> {
     }
   }
 
+  // Also scan compiled TypeScript CLIs from dist/src/clis/.
+  // These are authored in src/clis/ and compiled by tsc to dist/src/clis/.
+  // modulePath is stored relative to CLIS_DIR so runtime can resolve them correctly.
+  const COMPILED_CLIS_DIR = path.join(PACKAGE_ROOT, 'dist', 'src', 'clis');
+  if (fs.existsSync(COMPILED_CLIS_DIR)) {
+    for (const site of fs.readdirSync(COMPILED_CLIS_DIR)) {
+      const siteDir = path.join(COMPILED_CLIS_DIR, site);
+      if (!fs.statSync(siteDir).isDirectory()) continue;
+      for (const file of fs.readdirSync(siteDir)) {
+        if (file.endsWith('.js') && !file.endsWith('.d.js') && !file.endsWith('.test.js') && file !== 'index.js') {
+          const filePath = path.join(siteDir, file);
+          const entries = await loadManifestEntries(filePath, site);
+          for (const entry of entries) {
+            const key = `${entry.site}/${entry.name}`;
+            if (!manifest.has(key)) {
+              // Rewrite modulePath to be relative to CLIS_DIR
+              entry.modulePath = path.relative(CLIS_DIR, filePath);
+              if (entry.sourceFile) {
+                entry.sourceFile = path.relative(CLIS_DIR, filePath);
+              }
+              manifest.set(key, entry);
+            }
+          }
+        }
+      }
+    }
+  }
+
   return [...manifest.values()].sort((a, b) => a.site.localeCompare(b.site) || a.name.localeCompare(b.name));
 }
 

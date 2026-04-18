@@ -36,6 +36,7 @@ interface TripProduct {
     price: number;
     originalPrice?: number;
     priceUnit?: string;
+    minPriceRemarks?: string[];
   };
   statistics?: {
     commentScore?: number;
@@ -74,6 +75,8 @@ function parseDays(name: string): number | null {
  * 從產品名稱解析每日流量 (GB)
  * 例如: "Daily 5GB" → 5, "Daily 0.5GB" → 0.5, "Daily 9GB" → 9
  * "Day Pass/Total Data Package" → null (彈性方案)
+ *
+ * 注意：超過 30GB/天 的宣稱通常是行銷說法（速度上限），不代表真實可用流量
  */
 function parseDailyGb(name: string): number | null {
   // 匹配 "Daily XGB" 或 "Daily X GB"
@@ -88,18 +91,45 @@ function parseDailyGb(name: string): number | null {
 }
 
 /**
+ * 每日流量是否為可疑的行銷宣稱（>30GB/天）
+ * 超過此值通常是「速度上限描述」而非真實流量
+ */
+function isSuspiciousGb(gb: number | null): boolean {
+  return gb !== null && gb > 30;
+}
+
+/**
  * 解析方案類型標籤
  * Day Pass → 彈性按日計費（價格即每日費用）
  * Total Data → 彈性總量計費
  * 兩者都有 → 兩種都支援
+ * Calendar-Day Billing → Day Pass 的另一種說法
  */
 function parsePlanType(name: string): string {
-  const hasDayPass = /day\s*pass/i.test(name);
+  const hasDayPass = /day\s*pass|calendar.?day\s*billing/i.test(name);
   const hasTotal = /total\s*(data)?\s*(package)?/i.test(name);
   if (hasDayPass && hasTotal) return 'Day Pass / Total';
   if (hasDayPass) return 'Day Pass';
   if (hasTotal) return 'Total Data';
   return 'Fixed';
+}
+
+/**
+ * 從 minPriceRemarks 解析天數（備援方案）
+ * trip.com 的 minPriceRemarks[1] 格式通常為：
+ *   "You can book \"Package QR code-7 days-Daily 5GB\" at this price..."
+ * 從中萃取天數數字
+ */
+function parseDaysFromRemark(remark: string): number | null {
+  // 匹配 "X days" 或 "X day"（排除 365 天長效卡）
+  const m = remark.match(/[- "](\d+)\s*days?[- "]/i);
+  if (m) {
+    const d = parseInt(m[1], 10);
+    // 365 天通常是「有效期」而非行程天數，跳過
+    if (d > 90) return null;
+    return d;
+  }
+  return null;
 }
 
 /**
@@ -126,14 +156,14 @@ function parseRealName(name: string): boolean {
  * 計算 CP 值
  *
  * 計算邏輯：
- * - 有 userDays：按用戶指定的 N 天計算
- * - 無 userDays：按產品的「最低天數」計算（因為起售价是對應最短天數的最低流量）
+ * - Day Pass 方案：price 本身就是每日費用，直接使用
+ * - Fixed 方案：price 除以「產品本身的天數」得每日費用
+ *   - 天數已知（例如 days=3）→ pricePerDay = price / 3，精確
+ *   - 天數未知（days=?）→ pricePerDay = price / userDays，估算，標示 ~
  *
- * CP 公式：
- * - 有明確 GB/日：CP = GB/日 ÷ 每日費用
- * - 無明確 GB/日（Day Pass）：以 0.5GB 估算
+ * CP 公式：CP = GB/日 ÷ 每日費用（越高越划算）
  *
- * 回傳：{ cpScore: number | null, formula: string }
+ * 回傳：{ cpScore: number | null; formula: string; isEstimate: boolean }
  */
 function calcCpScore(
   dailyGb: number | null,
@@ -141,28 +171,47 @@ function calcCpScore(
   productMinDays: number | null,
   planType: string,
   userDays?: number,
-): { cpScore: number | null; formula: string } {
-  if (price <= 0) return { cpScore: null, formula: 'N/A' };
+): { cpScore: number | null; formula: string; isEstimate: boolean } {
+  if (price <= 0) return { cpScore: null, formula: 'N/A', isEstimate: false };
 
-  // 如果有指定天數，使用指定天數；否則用產品最低天數（起售价對應的天數）
-  const calcDays = userDays ?? productMinDays ?? 1;
-  const pricePerDay = price / calcDays;
-  if (pricePerDay <= 0) return { cpScore: null, formula: 'N/A' };
+  let pricePerDay: number;
+  let isEstimate = false;
+
+  if (planType.includes('Day Pass')) {
+    // Day Pass：price 就是每日費用
+    pricePerDay = price;
+  } else if (productMinDays !== null && productMinDays > 0) {
+    // Fixed，天數已知：price 除以產品自身天數
+    pricePerDay = price / productMinDays;
+  } else {
+    // Fixed，天數不明：用 userDays 估算，標記為估算
+    pricePerDay = price / (userDays ?? 1);
+    isEstimate = true;
+  }
+
+  if (pricePerDay <= 0) return { cpScore: null, formula: 'N/A', isEstimate: false };
+
+  const estimateNote = isEstimate ? `（估算，天數按 ${userDays ?? 1}天計）` : '';
 
   if (dailyGb !== null) {
+    // 超過 30GB 的宣稱通常是行銷說法，CP 僅供參考
+    const suspiciousNote = isSuspiciousGb(dailyGb) ? '⚠️ 宣稱流量偏高，CP 僅供參考' : '';
     const cp = parseFloat((dailyGb / pricePerDay).toFixed(3));
-    const formula = `${dailyGb}GB ÷ $${pricePerDay.toFixed(2)}/天 = ${cp}`;
-    return { cpScore: cp, formula };
+    const formula = suspiciousNote
+      ? `${suspiciousNote}`
+      : `${dailyGb}GB ÷ $${pricePerDay.toFixed(2)}/天 = ${cp}${estimateNote}`;
+    // 可疑流量的 cpScore 仍保留讓排序參考，但 formula 顯示警告
+    return { cpScore: cp, formula, isEstimate: isEstimate || isSuspiciousGb(dailyGb) };
   }
 
   if (planType.includes('Day Pass')) {
     const estimatedGb = 0.5;
     const cp = parseFloat((estimatedGb / pricePerDay).toFixed(3));
-    const formula = `~${estimatedGb}GB ÷ $${pricePerDay.toFixed(2)}/天 ≈ ${cp}`;
-    return { cpScore: cp, formula };
+    const formula = `~${estimatedGb}GB ÷ $${pricePerDay.toFixed(2)}/天 ≈ ${cp}（估算）`;
+    return { cpScore: cp, formula, isEstimate: true };
   }
 
-  return { cpScore: null, formula: 'N/A' };
+  return { cpScore: null, formula: 'N/A', isEstimate: false };
 }
 
 /**
@@ -269,9 +318,9 @@ cli({
     },
     {
       name: 'days',
-      type: 'int',
+      type: 'str',
       positional: false,
-      help: '查詢天數（1-30天），按天數過濾並計算該天數下的 CP 值',
+      help: '查詢天數，支援單一天數或範圍，例如：7、7-9、10-14',
     },
     {
       name: 'limit',
@@ -305,7 +354,25 @@ cli({
     const country = String(kwargs.country || 'Vietnam').trim();
     if (!country) throw new ArgumentError('國家名稱不可為空，例如：Vietnam');
 
-    const userDays = typeof kwargs.days === 'number' ? kwargs.days : undefined;
+    // 解析天數：支援 "7" 或 "7-9" 格式
+    let minDays: number | undefined;
+    let maxDays: number | undefined;
+    if (kwargs.days) {
+      const daysStr = String(kwargs.days).trim();
+      const rangeMatch = daysStr.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+      const singleMatch = daysStr.match(/^(\d+)$/);
+      if (rangeMatch) {
+        minDays = parseInt(rangeMatch[1], 10);
+        maxDays = parseInt(rangeMatch[2], 10);
+        if (minDays > maxDays) [minDays, maxDays] = [maxDays, minDays];
+      } else if (singleMatch) {
+        minDays = parseInt(singleMatch[1], 10);
+        maxDays = minDays;
+      } else {
+        throw new ArgumentError(`天數格式錯誤，請使用數字（如 7）或範圍（如 7-9），收到：${daysStr}`);
+      }
+    }
+
     const limit = clampLimit(kwargs.limit, 20);
     const simType = String(kwargs.sim_type ?? 'all');
     const sortBy = String(kwargs.sort ?? 'cp');
@@ -313,7 +380,7 @@ cli({
 
     // 多撈一些讓過濾後還夠
     const fetchSize = Math.min(limit * 3, 50);
-    const products = await fetchSimCards(country, fetchSize, userDays);
+    const products = await fetchSimCards(country, fetchSize, minDays);
 
     if (!products.length) {
       throw new EmptyResultError(
@@ -326,15 +393,19 @@ cli({
     const parsed = products.map((p) => {
       const name = p.basicInfo?.name ?? '';
       const isEsim = parseIsEsim(name);
-      const days = parseDays(name);
-      const dailyGb = parseDailyGb(name);
       const planType = parsePlanType(name);
+      // 優先從名稱解析天數，Day Pass 類方案不需要天數
+      const daysFromName = parseDays(name);
+      const remark = p.priceInfo?.minPriceRemarks?.[1] ?? '';
+      // Fixed 方案名稱解析失敗時，嘗試從 minPriceRemarks 提取
+      const days = daysFromName ?? (planType === 'Fixed' ? parseDaysFromRemark(remark) : null);
+      const dailyGb = parseDailyGb(name);
       const realNameReq = parseRealName(name);
       const price = p.priceInfo?.price ?? 0;
-      const { cpScore, formula } = calcCpScore(dailyGb, price, days, planType, userDays);
+      const { cpScore, formula, isEstimate } = calcCpScore(dailyGb, price, days, planType, minDays);
       const url = p.basicInfo?.detailUrl?.URL ?? p.basicInfo?.detailUrl?.ONLINE ?? '';
       const cpDisplay = cpScore !== null
-        ? (dailyGb === null ? `~${cpScore}` : String(cpScore))
+        ? (isEstimate ? `~${cpScore}` : String(cpScore))
         : 'N/A';
 
       return {
@@ -360,6 +431,12 @@ cli({
       if (simType === 'esim' && !item._isEsim) return false;
       if (simType === 'physical' && item._isEsim) return false;
       if (noRealName && item._realName) return false;
+      // 天數範圍過濾：只有在方案天數已知且明確超出範圍時才排除
+      // 天數未知（?）的方案保留，讓使用者自行確認
+      if (minDays !== undefined && maxDays !== undefined) {
+        const productDays = typeof item.days === 'number' ? item.days : null;
+        if (productDays !== null && (productDays < minDays || productDays > maxDays)) return false;
+      }
       return true;
     });
 
@@ -405,15 +482,16 @@ cli({
   footerExtra: (kwargs) => {
     const country = kwargs.country ?? 'Vietnam';
     const sort = kwargs.sort ?? 'cp';
-    const userDays = kwargs.days;
+    const daysRaw = kwargs.days ? String(kwargs.days) : '';
     const sortLabel = sort === 'cp' ? 'CP 值（越高越划算）' : sort === 'price' ? '價格低→高' : '名稱';
-    const daysLabel = userDays ? `／天數：${userDays}天` : '';
+    const daysLabel = daysRaw ? `／天數：${daysRaw}天` : '';
     return `資料來源：trip.com ／ 國家：${country}${daysLabel} ／ 排序：${sortLabel}`;
   },
 });
 
 export const __test__ = {
   parseDays,
+  parseDaysFromRemark,
   parseDailyGb,
   parsePlanType,
   parseIsEsim,
