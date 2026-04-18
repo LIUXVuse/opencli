@@ -1,7 +1,21 @@
 # HANDOVER — trip sim-rank 指令
 
 > 上次更新：2026-04-18
-> 當前狀態：v1.2 穩定 — Days=? 解析改善完畢，manifest 掃描路徑修正
+> 當前狀態：v1.3 穩定 — CP 值排名修正，彈性方案 GB 從 remark 解析，3GB 最低門檻過濾
+
+---
+
+## ✅ 本次完成（v1.3，2026-04-18）
+
+### CP 值排名真實化
+
+1. **`parseDailyGbFromRemark`** — 從 `minPriceRemarks[1]` 解析每日 GB（支援 `Daily 0.5GB`、`Daily - 0.5GB`、`500MB` 格式），解決「彈性方案 CP=N/A 被埋到後面」問題
+2. **`min_daily_gb` 過濾** — Worker 預設 3GB/天門檻，過濾低流量垃圾方案
+3. **自動降級策略** — 3GB 無結果 → 降 1GB → 再降全開，確保任何國家都有結果（中國只有 0.5GB 方案也能顯示）
+
+### Worker 架構說明（重要）
+
+網站用的是 `api/lib/sim-rank.ts`（Worker 版），不是本 CLI。改邏輯時**兩份都要改**，改完 `npx wrangler deploy`。
 
 ---
 
@@ -105,6 +119,7 @@ Fixed 方案（天數不明）：
 ## 🔴 下次可做的事
 
 1. ~~**Days=? 解析改善**~~ ✅ 已完成（v1.2）
+2. ~~**CP=N/A 彈性方案問題**~~ ✅ 已完成（v1.3）
 2. **與網站整合**：見下方整合評估
 
 ---
