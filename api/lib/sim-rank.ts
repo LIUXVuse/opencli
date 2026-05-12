@@ -142,6 +142,114 @@ function calcCpScore(
   return { cpScore: null, formula: 'N/A（無流量資訊）', isEstimate: false };
 }
 
+// ── Trip.com 產品詳細頁解析（取得精確套餐價格）────────────────────────────────
+
+/** 從 HTML 字串中提取第一個完整 JSON 陣列 */
+function extractJsonArray(html: string, key: string): unknown[] | null {
+  const keyIdx = html.indexOf(`"${key}":`);
+  if (keyIdx === -1) return null;
+  const start = html.indexOf('[', keyIdx);
+  if (start === -1) return null;
+  let depth = 0;
+  let end = start;
+  for (let i = start; i < html.length; i++) {
+    if (html[i] === '[') depth++;
+    else if (html[i] === ']') {
+      depth--;
+      if (depth === 0) { end = i + 1; break; }
+    }
+  }
+  try { return JSON.parse(html.slice(start, end)) as unknown[]; } catch { return null; }
+}
+
+interface RawPackage {
+  packageId: number;
+  salesProperties: Array<{
+    saleProperty: { name: string };
+    salePropertyValues: Array<{ name: string }>;
+  }>;
+  resourceIds: number[];
+}
+
+interface RawResource {
+  resourceId: number;
+  basicInfo: { minPrice: number };
+}
+
+/**
+ * 抓取產品詳細頁，找出指定天數中 CP 最高的套餐
+ * 回傳 null 表示找不到或 fetch 失敗
+ */
+async function fetchBestPackage(
+  productId: string,
+  targetDays: number,
+): Promise<{ dailyGb: number; totalPrice: number; gbLabel: string } | null> {
+  try {
+    const res = await fetch(
+      `https://www.trip.com/things-to-do/detail/${productId}?language=EN&locale=en_xx`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      },
+    );
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // 折扣比例（每個產品各自的促銷折扣）
+    const discountMatch = html.match(/"startPriceInfo":\{"originalPrice":([\d.]+),"price":([\d.]+)/);
+    if (!discountMatch) return null;
+    const discountRatio = parseFloat(discountMatch[2]) / parseFloat(discountMatch[1]);
+
+    const packages = extractJsonArray(html, 'packages') as RawPackage[] | null;
+    const resources = extractJsonArray(html, 'resourceInfos') as RawResource[] | null;
+    if (!packages || !resources) return null;
+
+    // resourceId → 實際售價
+    const priceMap = new Map<number, number>(
+      resources.map(r => [r.resourceId, parseFloat((r.basicInfo.minPrice * discountRatio).toFixed(3))]),
+    );
+
+    let best: { dailyGb: number; totalPrice: number; gbLabel: string; cp: number } | null = null;
+
+    for (const pkg of packages) {
+      const daysProp = pkg.salesProperties.find(sp => sp.saleProperty.name === 'Days');
+      const gbProp = pkg.salesProperties.find(sp => sp.saleProperty.name === 'Package Contents');
+      if (!daysProp || !gbProp) continue;
+
+      // 解析天數
+      const daysLabel = daysProp.salePropertyValues[0]?.name ?? '';
+      const daysMatch = daysLabel.match(/^(\d+)\s*days?$/i);
+      if (!daysMatch || parseInt(daysMatch[1], 10) !== targetDays) continue;
+
+      const gbLabel = gbProp.salePropertyValues[0]?.name ?? '';
+      const totalPrice = priceMap.get(pkg.resourceIds[0]);
+      if (!totalPrice || totalPrice <= 0) continue;
+
+      // 解析每日 GB
+      let dailyGb: number | null = null;
+      const dailyMatch = gbLabel.match(/daily\s+([\d.]+)\s*gb/i);
+      if (dailyMatch) { dailyGb = parseFloat(dailyMatch[1]); }
+      else {
+        const totalMatch = gbLabel.match(/total\s*([\d.]+)\s*gb/i);
+        if (totalMatch) { dailyGb = parseFloat((parseFloat(totalMatch[1]) / targetDays).toFixed(3)); }
+      }
+      if (dailyGb === null || dailyGb > 30) continue; // 跳過可疑高流量
+
+      const cp = dailyGb / (totalPrice / targetDays);
+      if (best === null || cp > best.cp) {
+        best = { dailyGb, totalPrice, gbLabel, cp };
+      }
+    }
+
+    return best ? { dailyGb: best.dailyGb, totalPrice: best.totalPrice, gbLabel: best.gbLabel } : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── 查詢 trip.com ─────────────────────────────────────────────────────────────
 
 export async function fetchAndRankSimCards(opts: {
@@ -197,6 +305,25 @@ export async function fetchAndRankSimCards(opts: {
 
   const products = payload.products ?? [];
 
+  // 精確天數查詢時，對彈性方案預先抓取詳細套餐（最多 8 個並行）
+  const isExactDays = minDays !== undefined && maxDays !== undefined && minDays === maxDays;
+  const detailMap = new Map<string, { dailyGb: number; totalPrice: number; gbLabel: string }>();
+  if (isExactDays) {
+    const flexProducts = products
+      .filter(p => {
+        const pt = parsePlanType(p.basicInfo?.name ?? '');
+        return pt.includes('Day Pass') || pt.includes('Total Data');
+      })
+      .slice(0, 8);
+    const results = await Promise.allSettled(
+      flexProducts.map(p => fetchBestPackage(p.id, minDays!)),
+    );
+    flexProducts.forEach((p, i) => {
+      const r = results[i];
+      if (r.status === 'fulfilled' && r.value) detailMap.set(p.id, r.value);
+    });
+  }
+
   const parsed = products.map((p) => {
     const name = p.basicInfo?.name ?? '';
     const isEsim = parseIsEsim(name);
@@ -205,13 +332,17 @@ export async function fetchAndRankSimCards(opts: {
     const remark = p.priceInfo?.minPriceRemarks?.[1] ?? '';
     const days = daysFromName ?? (planType === 'Fixed' ? parseDaysFromRemark(remark) : null);
     const realNameReq = parseRealName(name);
-    const price = p.priceInfo?.price ?? 0;
     const url = p.basicInfo?.detailUrl?.URL ?? p.basicInfo?.detailUrl?.ONLINE ?? '';
 
+    // 有 detail 資料（精確天數查詢）→ 用真實套餐價格覆蓋，planType 視為 Fixed 計算
+    const detail = detailMap.get(p.id);
+    const price = detail ? detail.totalPrice : (p.priceInfo?.price ?? 0);
+    const detailDays = detail ? minDays! : null;
+
     // 計算每日流量：優先解析名稱，其次從 remark 備援，最後從 Total Data 總量推算
-    let dailyGb = parseDailyGb(name) ?? parseDailyGbFromRemark(remark);
+    let dailyGb: number | null = detail ? detail.dailyGb : (parseDailyGb(name) ?? parseDailyGbFromRemark(remark));
     let dailyGbIsFromTotal = false;
-    const dailyGbIsFromRemark = dailyGb !== null && parseDailyGb(name) === null;
+    const dailyGbIsFromRemark = !detail && dailyGb !== null && parseDailyGb(name) === null;
     // remark 明確標示 Total XGB + N days → 精確計算每日流量（不估算）
     if (dailyGb === null) {
       const totalGbFromRemark = parseTotalGbFromRemark(remark);
@@ -237,14 +368,19 @@ export async function fetchAndRankSimCards(opts: {
       }
     }
 
-    const { cpScore, formula, isEstimate } = calcCpScore(dailyGb, price, days, planType, minDays);
-    const cpDisplay = cpScore !== null ? ((isEstimate || dailyGbIsFromTotal || dailyGbIsFromRemark) ? `~${cpScore}` : String(cpScore)) : 'N/A';
+    // detail 有資料時視為 Fixed（天數和價格都精確），直接覆蓋 days 和 planType
+    const effectiveDays = detailDays ?? days;
+    const effectivePlanType = detail ? 'Fixed' : planType;
+    const { cpScore, formula, isEstimate } = calcCpScore(dailyGb, price, effectiveDays, effectivePlanType, minDays);
+    const cpDisplay = cpScore !== null
+      ? ((isEstimate || dailyGbIsFromTotal || dailyGbIsFromRemark) ? `~${cpScore}` : String(cpScore))
+      : 'N/A';
 
     return {
       name: name.split(/\s*\|\s*/).slice(0, 2).join(' | ').substring(0, 60),
       type: (isEsim ? 'eSIM' : 'SIM card') as 'eSIM' | 'SIM card',
-      plan: planType,
-      days: (days ?? '?') as number | '?',
+      plan: detail ? `${planType} ✓${detail.gbLabel}` : planType,
+      days: (effectiveDays ?? '?') as number | '?',
       daily_gb: dailyGb !== null ? String(dailyGb) : '彈性',
       min_price_usd: price,
       formula,
@@ -254,7 +390,7 @@ export async function fetchAndRankSimCards(opts: {
       _isEsim: isEsim,
       _realName: realNameReq,
       _cpScore: cpScore,
-      _productDays: days,
+      _productDays: effectiveDays,
     };
   });
 
