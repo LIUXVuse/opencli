@@ -1,11 +1,17 @@
 # HANDOVER — opencli 專案整體交接
 
 > 上次更新：2026-05-12
-> 當前狀態：v1.6.1，自行 fork 自 jackwener/opencli，已新增 forex 和 trip 模組
+> 當前狀態：v1.6，Worker 已部署，彈性方案精確 CP 值已上線
 
 ---
 
-## ✅ 本次完成（對比 upstream v1.6.1）
+## ✅ 本次完成（2026-05-12）
+
+- **sim-rank v1.5**：修補 8 種漏解析 GB 格式（`Total-30GB`、`7GB data/day`、`Total 0.5GB` 等），漏掉的真實方案重新進入排名
+- **sim-rank v1.6**：精確天數查詢時（如 `?days=7`），自動對彈性方案抓產品詳細頁，找出目標天數 CP 最高的套餐並用真實價格排名
+  - 實測：Vietnam 5G eSIM 7天 CP 從錯誤 2.778 → 正確 **6.167**
+  - `plan` 欄顯示 `Day Pass / Total ✓Daily 3GB` 標示選中套餐
+- **Cloudflare Worker 已部署**：`https://opencli-api.liupony2000.workers.dev`
 
 ### 自行新增的模組
 
@@ -14,38 +20,28 @@
 | `opencli forex rate` | `src/clis/forex/rate.ts` | ✅ 穩定 |
 | `opencli forex compare` | `src/clis/forex/compare.ts` | ✅ 穩定 |
 | `opencli forex best` | `src/clis/forex/best.ts` | ✅ 穩定 |
-| `opencli trip sim-rank` | `src/clis/trip/sim-rank.ts` | ✅ 穩定 v1.5 |
-| Cloudflare Worker API | `api/worker.ts` | 存在，狀態待確認 |
-
-### 自行修改的檔案
-
-- `autoresearch/run-browse.sh` — 有自訂改動
-- `autoresearch/run-skill.sh` — 有自訂改動
-- `scripts/check-doc-coverage.sh` — 有自訂改動
-- `src/clis/trip/sim-rank.ts` — 主程式（含 3 個 bug 修正 + --days 範圍格式）
+| `opencli trip sim-rank` | `src/clis/trip/sim-rank.ts` | ✅ 穩定 v1.5（CLI 版） |
+| Cloudflare Worker API | `api/worker.ts` + `api/lib/sim-rank.ts` | ✅ v1.6 已部署 |
 
 ---
 
 ## 🔴 下一個對話要先做（高優先）
 
-### Step 1：拉 upstream 更新（在 Mac Terminal 執行）
+### Step 1：同步 CLI 版的 v1.6 邏輯
 
-```bash
-cd ~/Documents/porject/opencli
+Worker 版（`api/lib/sim-rank.ts`）已有精確 CP 值功能，但 CLI 版（`src/clis/trip/sim-rank.ts`）還停在 v1.5。
+兩者要保持一致，不然 `opencli trip sim-rank --days 7` 和 API 結果會不同。
 
-# 把改動存起來（含 untracked 新檔案）
-git stash -u
+做法：把 `fetchBestPackage`、`extractJsonArray` 兩個函式和 pre-fetch 邏輯從 Worker 版搬到 CLI 版。
 
-# 從 upstream 拉最新
-git fetch upstream
-git merge upstream/main
+### Step 2：老司機地圖網站整合 SIM 卡排名
 
-# 還原你的改動
-git stash pop
-# 若有衝突：手動解 → git add → git stash drop
+Worker API 已可直接呼叫：
+```
+GET https://opencli-api.liupony2000.workers.dev/api/sim-rank?country=Vietnam&days=7&sim_type=esim&no_real_name=true
 ```
 
-> untracked 的 api/、src/clis/forex/、wrangler.toml 不會衝突，可以放心。
+在老司機地圖（`/Users/liu/Documents/porject/肥宅老司機前進世界地圖`）新增 SIM 卡比價頁面，呼叫上面這個 API 顯示結果。
 
 ---
 
