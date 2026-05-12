@@ -326,6 +326,105 @@ async function fetchSimCards(country: string, pageSize: number, days?: number): 
   return payload.products ?? [];
 }
 
+// ── 產品詳細頁解析（精確套餐 CP 值）─────────────────────────────────────────────
+
+function extractJsonArray(html: string, key: string): unknown[] | null {
+  const keyIdx = html.indexOf(`"${key}":`);
+  if (keyIdx === -1) return null;
+  const start = html.indexOf('[', keyIdx);
+  if (start === -1) return null;
+  let depth = 0;
+  let end = start;
+  for (let i = start; i < html.length; i++) {
+    if (html[i] === '[') depth++;
+    else if (html[i] === ']') {
+      depth--;
+      if (depth === 0) { end = i + 1; break; }
+    }
+  }
+  try { return JSON.parse(html.slice(start, end)) as unknown[]; } catch { return null; }
+}
+
+interface RawPackage {
+  packageId: number;
+  salesProperties: Array<{
+    saleProperty: { name: string };
+    salePropertyValues: Array<{ name: string }>;
+  }>;
+  resourceIds: number[];
+}
+
+interface RawResource {
+  resourceId: number;
+  basicInfo: { minPrice: number };
+}
+
+async function fetchBestPackage(
+  productId: string,
+  targetDays: number,
+): Promise<{ dailyGb: number; totalPrice: number; gbLabel: string } | null> {
+  try {
+    const res = await fetch(
+      `https://www.trip.com/things-to-do/detail/${productId}?language=EN&locale=en_xx`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      },
+    );
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const discountMatch = html.match(/"startPriceInfo":\{"originalPrice":([\d.]+),"price":([\d.]+)/);
+    if (!discountMatch) return null;
+    const discountRatio = parseFloat(discountMatch[2]) / parseFloat(discountMatch[1]);
+
+    const packages = extractJsonArray(html, 'packages') as RawPackage[] | null;
+    const resources = extractJsonArray(html, 'resourceInfos') as RawResource[] | null;
+    if (!packages || !resources) return null;
+
+    const priceMap = new Map<number, number>(
+      resources.map(r => [r.resourceId, parseFloat((r.basicInfo.minPrice * discountRatio).toFixed(3))]),
+    );
+
+    let best: { dailyGb: number; totalPrice: number; gbLabel: string; cp: number } | null = null;
+
+    for (const pkg of packages) {
+      const daysProp = pkg.salesProperties.find(sp => sp.saleProperty.name === 'Days');
+      const gbProp = pkg.salesProperties.find(sp => sp.saleProperty.name === 'Package Contents');
+      if (!daysProp || !gbProp) continue;
+
+      const daysLabel = daysProp.salePropertyValues[0]?.name ?? '';
+      const daysMatch = daysLabel.match(/^(\d+)\s*days?$/i);
+      if (!daysMatch || parseInt(daysMatch[1], 10) !== targetDays) continue;
+
+      const gbLabel = gbProp.salePropertyValues[0]?.name ?? '';
+      const totalPrice = priceMap.get(pkg.resourceIds[0]);
+      if (!totalPrice || totalPrice <= 0) continue;
+
+      let dailyGb: number | null = null;
+      const dailyMatch = gbLabel.match(/daily\s+([\d.]+)\s*gb/i);
+      if (dailyMatch) { dailyGb = parseFloat(dailyMatch[1]); }
+      else {
+        const totalMatch = gbLabel.match(/total\s*([\d.]+)\s*gb/i);
+        if (totalMatch) { dailyGb = parseFloat((parseFloat(totalMatch[1]) / targetDays).toFixed(3)); }
+      }
+      if (dailyGb === null || dailyGb > 30) continue;
+
+      const cp = dailyGb / (totalPrice / targetDays);
+      if (best === null || cp > best.cp) {
+        best = { dailyGb, totalPrice, gbLabel, cp };
+      }
+    }
+
+    return best ? { dailyGb: best.dailyGb, totalPrice: best.totalPrice, gbLabel: best.gbLabel } : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── 指令註冊 ──────────────────────────────────────────────────────────────────
 
 cli({
@@ -416,31 +515,54 @@ cli({
       );
     }
 
+    // 精確天數查詢時，對彈性方案預先抓取詳細套餐（最多 8 個並行）
+    const isExactDays = minDays !== undefined && maxDays !== undefined && minDays === maxDays;
+    const detailMap = new Map<string, { dailyGb: number; totalPrice: number; gbLabel: string }>();
+    if (isExactDays) {
+      const flexProducts = products
+        .filter(p => {
+          const pt = parsePlanType(p.basicInfo?.name ?? '');
+          return pt.includes('Day Pass') || pt.includes('Total Data');
+        })
+        .slice(0, 8);
+      const results = await Promise.allSettled(
+        flexProducts.map(p => fetchBestPackage(p.id, minDays!)),
+      );
+      flexProducts.forEach((p, i) => {
+        const r = results[i];
+        if (r.status === 'fulfilled' && r.value) detailMap.set(p.id, r.value);
+      });
+    }
+
     // 解析每個產品
     const parsed = products.map((p) => {
       const name = p.basicInfo?.name ?? '';
       const isEsim = parseIsEsim(name);
       const planType = parsePlanType(name);
-      // 優先從名稱解析天數，Day Pass 類方案不需要天數
       const daysFromName = parseDays(name);
       const remark = p.priceInfo?.minPriceRemarks?.[1] ?? '';
-      // Fixed 方案名稱解析失敗時，嘗試從 minPriceRemarks 提取
       const days = daysFromName ?? (planType === 'Fixed' ? parseDaysFromRemark(remark) : null);
-      // 每日流量：優先從名稱解析，名稱沒有時從 remark 備援
-      let dailyGb = parseDailyGb(name) ?? parseDailyGbFromRemark(remark);
-      // remark 明確標示 Total XGB + N days → 精確計算每日流量（不估算）
-      if (dailyGb === null) {
+      const url = p.basicInfo?.detailUrl?.URL ?? p.basicInfo?.detailUrl?.ONLINE ?? '';
+
+      // 有 detail 資料時用真實套餐價格，否則走原本解析流程
+      const detail = detailMap.get(p.id);
+      const price = detail ? detail.totalPrice : (p.priceInfo?.price ?? 0);
+      const detailDays = detail ? minDays! : null;
+
+      let dailyGb: number | null = detail ? detail.dailyGb : (parseDailyGb(name) ?? parseDailyGbFromRemark(remark));
+      if (!detail && dailyGb === null) {
         const totalGbFromRemark = parseTotalGbFromRemark(remark);
         const remarkDays = parseDaysFromRemark(remark);
         if (totalGbFromRemark !== null && remarkDays !== null && remarkDays > 0) {
           dailyGb = parseFloat((totalGbFromRemark / remarkDays).toFixed(3));
         }
       }
-      const dailyGbIsFromRemark = dailyGb !== null && parseDailyGb(name) === null;
+      const dailyGbIsFromRemark = !detail && dailyGb !== null && parseDailyGb(name) === null;
       const realNameReq = parseRealName(name);
-      const price = p.priceInfo?.price ?? 0;
-      const { cpScore, formula, isEstimate } = calcCpScore(dailyGb, price, days, planType, minDays);
-      const url = p.basicInfo?.detailUrl?.URL ?? p.basicInfo?.detailUrl?.ONLINE ?? '';
+
+      const effectiveDays = detailDays ?? days;
+      const effectivePlanType = detail ? 'Fixed' : planType;
+      const { cpScore, formula, isEstimate } = calcCpScore(dailyGb, price, effectiveDays, effectivePlanType, minDays);
       const cpDisplay = cpScore !== null
         ? ((isEstimate || dailyGbIsFromRemark) ? `~${cpScore}` : String(cpScore))
         : 'N/A';
@@ -449,8 +571,8 @@ cli({
         id: p.id,
         name: buildShortName(name),
         type: isEsim ? 'eSIM' : 'SIM card',
-        plan: planType,
-        days: days ?? '?',
+        plan: detail ? `${planType} ✓${detail.gbLabel}` : planType,
+        days: (effectiveDays ?? '?') as number | '?',
         daily_gb: dailyGb !== null ? `${dailyGb}` : '彈性',
         min_price_usd: price,
         formula,
