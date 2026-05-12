@@ -1,7 +1,7 @@
 # HANDOVER — trip sim-rank 指令
 
 > 上次更新：2026-05-12
-> 當前狀態：v1.5 穩定（GB 解析補漏），下一步：detail API 取得真實每日 CP 值
+> 當前狀態：v1.6 穩定（彈性方案真實 CP 值），Worker 已部署
 
 ---
 
@@ -164,7 +164,22 @@ Fixed 方案（天數不明）：
 
 ---
 
-## 🔴 下一個最重要的任務：真實多套餐 CP 值（2026-05-12 完成調查）
+## ✅ 本次完成（v1.6，2026-05-12）— 彈性方案真實 CP 值
+
+精確天數查詢（如 `days=7`）時，自動對彈性方案（Day Pass / Total Data）抓取產品詳細頁：
+
+- 新增 `fetchBestPackage(productId, targetDays)` — 下載詳細頁 HTML，解析所有天數套餐，找出 CP 最高的
+- `fetchAndRankSimCards` 在 parse 前並行抓最多 8 個彈性產品
+- 用真實套餐價格覆蓋搜尋 API 的最低價，CP 計算從此準確
+- `plan` 欄位新增 `✓Daily 3GB` 標示選中的套餐
+
+實測：Vietnam 5G eSIM 7天，CP 從錯誤 2.778 → 正確 **6.167**
+
+⚠️ 目前只修改了 Worker 版（`api/lib/sim-rank.ts`），CLI 版尚未同步
+
+---
+
+## 🔴 下一個最重要的任務（已完成調查，供參考）
 
 ### 問題說明
 
