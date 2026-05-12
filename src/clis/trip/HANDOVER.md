@@ -1,7 +1,7 @@
 # HANDOVER — trip sim-rank 指令
 
-> 上次更新：2026-04-18
-> 當前狀態：v1.3 穩定 — CP 值排名修正，彈性方案 GB 從 remark 解析，3GB 最低門檻過濾
+> 上次更新：2026-04-19
+> 當前狀態：v1.4 穩定（SIM 卡 + 飯店比價功能上線）
 
 ---
 
@@ -116,11 +116,137 @@ Fixed 方案（天數不明）：
 
 ---
 
+## ✅ 本次完成（v1.4，2026-04-19）
+
+### 飯店比價功能（一鍵開多平台）
+
+- **新增 `HotelComparePanel.tsx`**（`/Users/liu/Documents/porject/肥宅老司機前進世界地圖/components/`）
+  - 使用者輸入城市 + 飯店名稱 + 入退房日期 + 人數
+  - 預設勾選：Booking.com、Agoda、Trip.com
+  - 可加選：Expedia、Hotels.com、易遊網
+  - 一鍵同時開所有勾選平台的新分頁，讓使用者自己比價
+- **整合進 `AboutOverlay.tsx`** 的旅遊預訂 tab，新增「飯店比價」按鈕
+
+### 為何不做自動爬取比較
+
+- Agoda GraphQL 需要 session headers，headless 被 block
+- Booking.com 同房型有合作商價 vs 標準價（抓哪個？）
+- 「一鍵開多分頁」比爬蟲可靠、零維護、不違規
+
+### RB Resort Pattaya 實測比價（6/22-24，2晚）
+
+| 房型（35m² 陽台） | Trip.com | Agoda | Booking.com |
+|-----------------|---------|-------|-------------|
+| Deluxe Balcony | $114 | ~$100 | $167（合作商）/ $366（標準） |
+
+| 房型（32m² 池畔） | Trip.com | Agoda | Booking.com |
+|-----------------|---------|-------|-------------|
+| Poolside Room | $142 | ~$134 | $472 |
+
+**結論：Booking.com 標準價貴 3-4 倍，Trip.com ≈ Agoda**
+
+---
+
+## ✅ 本次完成（v1.5，2026-05-12）
+
+### GB 解析補漏（修掉假資料問題）
+
+發現 8 種 remark 格式無法解析出 GB，導致真實方案 CP=N/A 被埋到後面：
+
+1. **新增 `parseDailyGbFromRemark` 補漏**：加入 `XGB data/day` / `XGB/day` 格式
+   - 範例：`[Vinaphone] 7GB data/day` → 7GB/天
+2. **新增 `parseTotalGbFromRemark`**：從 remark 的 `Total XGB + N days` 精確推算每日流量
+   - 範例：`Package 5 days-Total - 30GB` → 30 ÷ 5 = 6GB/天
+   - 範例：`Package Pick-up-7 days-Mobifone-Total-30GB` → 30 ÷ 7 = 4.286GB/天
+   - 365 天長效卡、MB-GB range 格式 → 正確略過，不亂猜
+
+同步修改 Worker (`api/lib/sim-rank.ts`) 與 CLI (`src/clis/trip/sim-rank.ts`)。
+
+---
+
 ## 🔴 下次可做的事
 
 1. ~~**Days=? 解析改善**~~ ✅ 已完成（v1.2）
 2. ~~**CP=N/A 彈性方案問題**~~ ✅ 已完成（v1.3）
-2. **與網站整合**：見下方整合評估
+3. ~~**飯店跨平台比價**~~ ✅ 已完成（v1.4，一鍵開多平台）
+4. ~~**驗證易遊網 URL 格式**~~ — 已確認易遊網需要數字 CityID，無法只靠城市名稱搜尋，已從比價功能移除
+5. **選項 B（備用）**：為 Agoda / 易遊網 建立 city ID 對照表，讓搜尋直接跳出結果頁，不需使用者再按 Enter。已知：Agoda Pattaya=8584、易遊網 Pattaya=15267。詳見 memory `project_hotel_compare_future.md`
+
+---
+
+## 飯店比價研究筆記（2026-04-18）
+
+### 結論
+
+- **Trip.com 多幣別套利：無效**。Trip.com 匯率轉換很精準，USD/TWD/VND 換算後差距 < $1，沒有套利空間。
+- **跨平台比價（Trip.com vs Agoda vs Booking）：有意義**，是下一步要做的方向。
+- **不需要做 CLI**：飯店比價情境是網站功能，不是命令列工具。
+
+### Trip.com 飯店資料抓取方式（已驗證）
+
+**URL 格式**：
+```
+https://www.trip.com/hotels/list?city={cityId}&cityName={城市}&checkin=YYYY%2FMM%2FDD&checkout=YYYY%2FMM%2FDD&adult=2&children=0&curr=USD&locale=en-XX
+```
+
+**資料位置**：`window.IBU_HOTEL.initData.firstPageList.hotelList`
+
+**每間飯店包含**：
+- `hotelBasicInfo.hotelId` — 唯一 ID
+- `hotelBasicInfo.hotelName` — 名稱
+- `hotelBasicInfo.price` — 每晚價格（指定幣別）
+- `hotelStarInfo.star` — 星級
+- `commentInfo.commentScore` — 評分
+
+**重要**：SEO 頁面（`/hotels/hanoi-hotels-list-286/`）用的是 Next.js，沒有 IBU_HOTEL，**必須用 `/hotels/list?city=...` 格式**。
+
+### 城市 ID（已確認）
+- 河內 (Hanoi): **286**
+- 曼谷 (Bangkok): **359**
+- 普吉 (Phuket): **725**
+- 清邁 (Chiang Mai): **623**
+- 蘇梅島 (Koh Samui): **1229**
+- 甲米 (Krabi): **1405**
+- 胡志明市: 396（待確認）
+- 芭堤雅 (Pattaya): **622** ✅
+
+### 芭堤雅 City ID 問題（2026-04-18 踩坑紀錄）
+
+**已試但失敗的方法：**
+- 暴力試 ID（359 附近、400-600、700-1000 等範圍）—— ID 無規律，跨國家跳
+- 直接呼叫 Trip.com 內部 API（`/htls/hotel/list`、`/htls/search/suggest` 等）—— 全部返回 `method not support`，需要 SSR session
+- JS 合成事件觸發 autocomplete —— React 組件不響應 synthetic events，只認真實鍵盤輸入
+
+**正確的找法（下次進來第一件事）：**
+1. 打開 Trip.com 飯店頁面
+2. 搜尋框輸入「Pattaya」（手動或用 Playwright `browser_type` + 正確 ref）
+3. 點選 autocomplete 下拉選項 → 頁面 URL 或 IBU_HOTEL 裡會有 city ID
+4. 把 city ID 補進上方城市對照表
+
+**正確方式**：用 Playwright 導到 trip.com，搜城市名後讀 URL `?city=XXX`，不要用 JS 合成事件。
+
+## ✅ RB Resort Pattaya 比價驗證（2026-04-18，5/8-5/11，3晚）
+
+| 平台 | 每晚 | 評分 |
+|------|------|------|
+| Trip.com | **$60** | 8.8 / 3星 |
+| Booking.com | **$248** | 7.1 |
+
+**價差 $188/晚（Trip.com 便宜 75%）** ← 比價功能值得做
+
+### 網站功能設計建議（2026-04-18 更新）
+
+**比對流程（正確設計）：**
+- 使用者選城市（下拉選單，有預設城市 + city ID 對照表）
+- 使用者輸入飯店名稱
+- 系統同時查 Trip.com（city list）+ Booking.com（DOM）
+- 飯店名稱模糊比對，找相同飯店，顯示價差
+
+**不要** 讓使用者直接輸入任意城市名稱然後自動找 city ID——city ID 無法自動查詢。
+
+### 技術路線
+
+Playwright（瀏覽器）比 curl 可靠，因為有些頁面需要 JS 執行後才有 IBU_HOTEL 資料。
 
 ---
 
