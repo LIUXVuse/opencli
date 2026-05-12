@@ -25,23 +25,23 @@
 
 ---
 
+## ✅ 本次完成（2026-05-12）
+
+- **sim-rank v1.5**：修補 8 種漏解析 GB 格式（`Total-30GB`、`7GB data/day` 等）
+- **sim-rank v1.6 Worker**：精確天數查詢時自動抓 detail 頁，彈性方案用真實 7 天套餐 CP 排名
+- **sim-rank v1.6 CLI**：同步 Worker 邏輯，兩者現已對齊
+- **Cloudflare 已部署**：老司機地圖網站直接受益，實測 Vietnam 7 天結果正確
+  - #1 Da Nang 機場實體卡 CP~10.06（7GB/天，$4.87 total）
+  - #2 Vietnam 5G eSIM CP 6.167（Daily 3GB，$3.40 total）
+
+---
+
 ## 🔴 下一個對話要先做（高優先）
 
-### Step 1：同步 CLI 版的 v1.6 邏輯
+### Step 1：老司機地圖 SIM 卡頁面優化（可選）
 
-Worker 版（`api/lib/sim-rank.ts`）已有精確 CP 值功能，但 CLI 版（`src/clis/trip/sim-rank.ts`）還停在 v1.5。
-兩者要保持一致，不然 `opencli trip sim-rank --days 7` 和 API 結果會不同。
-
-做法：把 `fetchBestPackage`、`extractJsonArray` 兩個函式和 pre-fetch 邏輯從 Worker 版搬到 CLI 版。
-
-### Step 2：老司機地圖網站整合 SIM 卡排名
-
-Worker API 已可直接呼叫：
-```
-GET https://opencli-api.liupony2000.workers.dev/api/sim-rank?country=Vietnam&days=7&sim_type=esim&no_real_name=true
-```
-
-在老司機地圖（`/Users/liu/Documents/porject/肥宅老司機前進世界地圖`）新增 SIM 卡比價頁面，呼叫上面這個 API 顯示結果。
+網站 SIM 卡功能已可正常使用（老司機地圖已整合並實測通過）。
+若要優化，可考慮：加入「最優推薦」說明文字、顯示 `plan` 欄的套餐標示（`✓Daily 3GB`）、加入 `no_real_name` 過濾選項。
 
 ---
 
