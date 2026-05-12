@@ -100,6 +100,20 @@ function parseDailyGbFromRemark(remark: string): number | null {
   if (gbMatch) return parseFloat(gbMatch[1]);
   const mbMatch = remark.match(/(?:daily|daypass)\s*[-–]?\s*([\d.]+)\s*mb/i);
   if (mbMatch) return parseFloat((parseFloat(mbMatch[1]) / 1024).toFixed(3));
+  // "7GB data/day" 或 "7GB/day" 格式
+  const perDayMatch = remark.match(/([\d.]+)\s*gb\s*(?:data\s*)?\/\s*day/i);
+  if (perDayMatch) return parseFloat(perDayMatch[1]);
+  return null;
+}
+
+/**
+ * 從 remark 解析總流量（Total 方案）
+ * 結合 parseDaysFromRemark 可推算每日流量
+ * 例如: "Total-30GB"、"Total - 30GB"、"Total 0.5GB"
+ */
+function parseTotalGbFromRemark(remark: string): number | null {
+  const m = remark.match(/total\s*[-–]?\s*([\d.]+)\s*gb/i);
+  if (m) return parseFloat(m[1]);
   return null;
 }
 
@@ -413,7 +427,15 @@ cli({
       // Fixed 方案名稱解析失敗時，嘗試從 minPriceRemarks 提取
       const days = daysFromName ?? (planType === 'Fixed' ? parseDaysFromRemark(remark) : null);
       // 每日流量：優先從名稱解析，名稱沒有時從 remark 備援
-      const dailyGb = parseDailyGb(name) ?? parseDailyGbFromRemark(remark);
+      let dailyGb = parseDailyGb(name) ?? parseDailyGbFromRemark(remark);
+      // remark 明確標示 Total XGB + N days → 精確計算每日流量（不估算）
+      if (dailyGb === null) {
+        const totalGbFromRemark = parseTotalGbFromRemark(remark);
+        const remarkDays = parseDaysFromRemark(remark);
+        if (totalGbFromRemark !== null && remarkDays !== null && remarkDays > 0) {
+          dailyGb = parseFloat((totalGbFromRemark / remarkDays).toFixed(3));
+        }
+      }
       const dailyGbIsFromRemark = dailyGb !== null && parseDailyGb(name) === null;
       const realNameReq = parseRealName(name);
       const price = p.priceInfo?.price ?? 0;
@@ -508,6 +530,8 @@ export const __test__ = {
   parseDays,
   parseDaysFromRemark,
   parseDailyGb,
+  parseDailyGbFromRemark,
+  parseTotalGbFromRemark,
   parsePlanType,
   parseIsEsim,
   parseRealName,
