@@ -1,7 +1,7 @@
 # HANDOVER — trip sim-rank 指令
 
-> 上次更新：2026-04-19
-> 當前狀態：v1.4 穩定（SIM 卡 + 飯店比價功能上線）
+> 上次更新：2026-05-12
+> 當前狀態：v1.5 穩定（GB 解析補漏），下一步：detail API 取得真實每日 CP 值
 
 ---
 
@@ -161,6 +161,98 @@ Fixed 方案（天數不明）：
    - 365 天長效卡、MB-GB range 格式 → 正確略過，不亂猜
 
 同步修改 Worker (`api/lib/sim-rank.ts`) 與 CLI (`src/clis/trip/sim-rank.ts`)。
+
+---
+
+## 🔴 下一個最重要的任務：真實多套餐 CP 值（2026-05-12 完成調查）
+
+### 問題說明
+
+目前搜尋 API 只回傳「最便宜的 1 天套餐」的價格。
+當使用者查詢 7 天，顯示的 CP 值是用 1 天算的，根本是錯的。
+
+實驗數據（Vietnam 5G eSIM，productId=56527508，7天查詢）：
+- 目前系統：CP = 2.778（用 $0.18/天 × 0.5GB 算）
+- 真實最佳：Daily 3GB，7天 $3.405 → CP = **6.167**（差了 2.2 倍）
+
+### 關鍵發現（已驗證）
+
+Trip.com 產品詳細頁面的 HTML 裡埋有完整套餐資料，可以用 curl 直接取得（HTTP 200，~800KB）：
+
+```bash
+curl -s "https://www.trip.com/things-to-do/detail/56527508?language=EN&locale=en_xx" \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh)...' > page.html
+```
+
+HTML 裡有兩個 JSON 陣列：
+
+**1. `packages` 陣列（127筆）**
+```json
+{
+  "packageId": 69624867,
+  "salesProperties": [
+    {"saleProperty": {"name": "Card collection method"}, "salePropertyValues": [{"name": "QR code"}]},
+    {"saleProperty": {"name": "Days"}, "salePropertyValues": [{"name": "7 days"}]},
+    {"saleProperty": {"name": "Package Contents"}, "salePropertyValues": [{"name": "Daily 3GB"}]}
+  ],
+  "resourceIds": [69624962]
+}
+```
+
+**2. `resourceInfos` 陣列（127筆）**
+```json
+{"resourceId": 69624962, "basicInfo": {"minPrice": 7.0}}
+```
+注意：`minPrice` 是**原價**，需乘折扣比例才是實際售價。
+
+**3. `startPriceInfo`（每個產品獨立的折扣資訊）**
+```json
+{"originalPrice": 0.37, "price": 0.18, "preferentialAmount": 0.19}
+```
+→ discountRatio = price / originalPrice = 0.18 / 0.37 = 0.4865
+
+**實際售價公式：**
+```
+effectivePrice = resourceMinPrice * discountRatio
+```
+
+**已驗證的 7 天套餐真實 CP 排名：**
+```
+Daily 3GB   → 7天 $3.405 = $0.486/天, CP = 6.167  ← 最佳
+Total 30GB  → 7天 $5.259 = $0.751/天, CP = 5.705
+Daily 2GB   → 7天 $2.520 = $0.360/天, CP = 5.556
+Total 20GB  → 7天 $3.829 = $0.547/天, CP = 5.223
+Total 10GB  → 7天 $2.121 = $0.303/天, CP = 4.715
+```
+
+### 實作方案
+
+**方案 A（推薦）：深度模式 endpoint**
+
+新增 `/api/sim-rank-deep?country=Vietnam&days=7`：
+1. 呼叫現有搜尋 API，拿前 10-15 個候選
+2. 只對「彈性方案」（planType 含 Day Pass 或 Total Data）fetch detail HTML
+3. 從 HTML 解析出目標天數的所有套餐 + 真實售價
+4. 用真實價格算 CP，重新排名回傳
+
+**複雜度預估：**
+- 新增 `fetchProductDetail(productId, targetDays)` 函式：~60 行
+- 修改 Worker endpoint 邏輯：~30 行
+- 風險：每個 detail 頁面 ~800KB，10 個產品 = 8MB 下載，Cloudflare Worker 有 30 秒超時限制，需測試
+
+**方案 B（保守）：只加 URL 讓使用者自己點**
+
+在現有排名結果加上 `trip_detail_url`，使用者看到後自己點進去選套餐。
+- 改動：0 行（URL 已在現有結果裡了）
+- CP 值依然是估算，但至少提供跳轉入口
+
+### 實作時要注意
+
+1. **折扣比例是產品級別**，不同產品折扣不同，必須從各自 detail 頁的 `startPriceInfo` 抓
+2. **Day Pass 型產品**（"1-30 Days"）：packages 陣列會有很多天數選項，只取 `days === userDays` 那幾筆
+3. **Fixed 型產品**（固定天數）：不需要 fetch detail，現有邏輯已足夠
+4. **100GB 類可疑流量**：`Package Contents` 名稱含 `100GB` 的，加警告標記
+5. **QR code vs Pick-up**：`Card collection method` 欄位可用來區分，不影響 CP 計算
 
 ---
 
