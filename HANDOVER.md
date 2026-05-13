@@ -1,17 +1,15 @@
 # HANDOVER — opencli 專案整體交接
 
-> 上次更新：2026-05-12
-> 當前狀態：v1.6，Worker 已部署，彈性方案精確 CP 值已上線
+> 上次更新：2026-05-13
+> 當前狀態：v1.7，Worker 新增機場接送 API，老司機地圖出發攻略功能上線
 
 ---
 
-## ✅ 本次完成（2026-05-12）
+## ✅ 本次完成（2026-05-13）
 
-- **sim-rank v1.5**：修補 8 種漏解析 GB 格式（`Total-30GB`、`7GB data/day`、`Total 0.5GB` 等），漏掉的真實方案重新進入排名
-- **sim-rank v1.6**：精確天數查詢時（如 `?days=7`），自動對彈性方案抓產品詳細頁，找出目標天數 CP 最高的套餐並用真實價格排名
-  - 實測：Vietnam 5G eSIM 7天 CP 從錯誤 2.778 → 正確 **6.167**
-  - `plan` 欄顯示 `Day Pass / Total ✓Daily 3GB` 標示選中套餐
-- **Cloudflare Worker 已部署**：`https://opencli-api.liupony2000.workers.dev`
+- **Worker `/api/airport-transfer`**：新增機場接送端點，從 Trip.com CityPass tab 抓取，已部署並驗證（Hanoi 回傳 $16.99 接送選項）
+- **`api/lib/airport-transfer.ts`**：新建接送查詢核心邏輯，過濾含 transfer/shuttle/taxi/pickup 關鍵字的產品，回傳前 5 筆
+- 老司機地圖「出發攻略」整合此端點（機場接送卡片）
 
 ### 自行新增的模組
 
@@ -22,107 +20,58 @@
 | `opencli forex best` | `src/clis/forex/best.ts` | ✅ 穩定 |
 | `opencli trip sim-rank` | `src/clis/trip/sim-rank.ts` | ✅ 穩定 v1.5（CLI 版） |
 | Cloudflare Worker API | `api/worker.ts` + `api/lib/sim-rank.ts` | ✅ v1.6 已部署 |
-
----
-
-## ✅ 本次完成（2026-05-12）
-
-- **sim-rank v1.5**：修補 8 種漏解析 GB 格式（`Total-30GB`、`7GB data/day` 等）
-- **sim-rank v1.6 Worker**：精確天數查詢時自動抓 detail 頁，彈性方案用真實 7 天套餐 CP 排名
-- **sim-rank v1.6 CLI**：同步 Worker 邏輯，兩者現已對齊
-- **Cloudflare 已部署**：老司機地圖網站直接受益，實測 Vietnam 7 天結果正確
-  - #1 Da Nang 機場實體卡 CP~10.06（7GB/天，$4.87 total）
-  - #2 Vietnam 5G eSIM CP 6.167（Daily 3GB，$3.40 total）
+| Worker `/api/airport-transfer` | `api/lib/airport-transfer.ts` | ✅ v1.7 已部署 |
 
 ---
 
 ## 🔴 下一個對話要先做（高優先）
 
-### Step 1：老司機地圖 SIM 卡頁面優化（可選）
+### Step 1：`opencli trip plan` CLI
 
-網站 SIM 卡功能已可正常使用（老司機地圖已整合並實測通過）。
-若要優化，可考慮：加入「最優推薦」說明文字、顯示 `plan` 欄的套餐標示（`✓Daily 3GB`）、加入 `no_real_name` 過濾選項。
+把現有三個模組串成出發規劃一條龍：
+
+```bash
+opencli trip plan Vietnam --days 7 --budget 30000 --from TPE
+```
+
+輸出：匯率策略 + 最佳 SIM + 機場接送選項（CLI 版）
+位置：`src/clis/trip/plan.ts`
 
 ---
 
 ## 🟡 待開發功能（按優先度）
 
-### 1. `opencli crypto` — 加密貨幣行情（最簡單，推薦先做）
-
-- **來源**：CoinGecko 公開 API，完全免費、無需 API key
-- **指令設計**：
-  ```bash
-  opencli crypto price BTC ETH SOL
-  opencli crypto top --limit 20
-  ```
-- **位置**：新建 `src/clis/crypto/`
-- **難度**：低（1-2 小時）
-
----
+### 1. `opencli crypto` — 加密貨幣行情（最簡單）
+- 來源：CoinGecko 公開 API
+- `opencli crypto price BTC ETH SOL`
 
 ### 2. `opencli stock` — 台股行情
-
-- **來源**：TWSE 公開 CSV API（不需認證）
-- **指令設計**：
-  ```bash
-  opencli stock quote 2330 2317 0050
-  ```
-- **位置**：新建 `src/clis/stock/`
-- **難度**：低（2-3 小時）
-
----
+- 來源：TWSE 公開 CSV API
+- `opencli stock quote 2330 0050`
 
 ### 3. forex — 補完其他國家真實銀行匯率
-
-- **現況**：只有 VND 有真實銀行匯率（Vietcombank + Agribank），其他都用 Wise × 0.99 估算（帶 ⚠️）
-- **目標**：找到泰國、日本、韓國的靜態 API，讓 ⚠️ 消失
-- **調查順序**：
-  1. 泰國央行（BOT）
-  2. 日本郵政銀行
-  3. KEB Hana 韓國
-- **調查方式**：先 curl 測試，把結果貼給 Claude 分析，確定有真實匯率再整合
-- **難度**：中（每個國家約 1-2 小時）
-
----
-
-### 4. trip sim-rank — Days=? 解析改善
-
-- **現況**：許多方案天數顯示 `?`，因為產品名稱格式多樣
-- **目標**：從 `basicInfo.extras` 撈更多欄位，提高解析率
-- **難度**：中（需要 API 探索）
-- **詳細說明**：見 `src/clis/trip/HANDOVER.md`
-
----
-
-### 5. trip sim-rank → 網站整合（較大）
-
-- **網站路徑**：`/Users/liu/Documents/porject/肥宅老司機前進世界地圖`
-- **架構**：React + TypeScript，已有 `exchangeRateService.ts`
-- **先做**：測試 CORS
-  ```bash
-  curl -X POST https://www.trip.com/restapi/soa2/20684/json/productSearch \
-    -H "Content-Type: application/json" \
-    -d '{"client":{"currency":"USD","locale":"en-XX","platformId":24,"channel":118},"filtered":{"items":[],"pageIndex":1,"pageSize":5,"sort":"1","tab":"simcard"},"destination":{"keyword":"Vietnam SIM card"},"requestSource":"activity","productOption":{"needBasicInfo":true,"needPrice":true},"head":{"Locale":"en-XX","Currency":"USD"}}' | head -5
-  ```
-  - 成功 → 方案 A（前端直接呼叫，不需後端）
-  - 被 CORS 擋 → 方案 B（Cloudflare Worker 或 Vercel Function 做代理）
-- **難度**：高（半天以上）
+- 目前只有 VND 有真實銀行匯率，其他用 Wise × 0.99 估算（帶 ⚠️）
+- 調查順序：泰國央行（BOT）→ 日本郵政銀行 → KEB Hana
 
 ---
 
 ## ⚠️ 注意事項
 
 1. **fork 關係**：origin = 自己的 GitHub fork，upstream = jackwener/opencli。pull 要從 upstream，push 到 origin
-2. **SSH 問題**（2026-04-18 發現）：Windows 這邊的公鑰還沒加到 Mac 的 authorized_keys，需手動加：
-   ```bash
-   # 在 Mac Terminal 執行
-   echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIfQfXI8NAIu/T6m/bodNqic783dfLg3PrimIamw0WyB pony@windows-to-mac" >> ~/.ssh/authorized_keys
-   ```
-3. **SMB 沒有 git 寫入權限**：從 Windows 通過 `\\192.168.1.107\liu\...` 掛載，`.git/` 無法寫入，所有 git 操作必須在 Mac 本機執行
-4. **nvm 環境**：Mac 的 `~/.zshrc` 已設定 nvm，新終端機直接可用 `opencli`
-5. **API 等待限制**：Vietcombank 限制每 5 分鐘一次請求
+2. **SSH 已設定**：origin remote 已改為 SSH（`git@github.com:LIUXVuse/opencli.git`），不需 GH_TOKEN
+3. **nvm 環境**：Mac 的 `~/.zshrc` 已設定 nvm，新終端機直接可用 `opencli`
+4. **API 等待限制**：Vietcombank 限制每 5 分鐘一次請求
+5. **Trip.com CityPass 資料稀少**：部分城市（如雅加達）可能查不到接送資料，前端已有 fallback 顯示
 
 ---
+
+## Cloudflare Worker 端點總覽
+
+| 端點 | 說明 |
+|------|------|
+| `GET /api/forex` | 今日匯率（KV 每日快取） |
+| `GET /api/sim-rank` | SIM 卡 CP 值排名 |
+| `GET /api/airport-transfer?city=Hanoi` | 機場接送選項（Trip.com） |
 
 ## 模組各自的詳細 HANDOVER
 
