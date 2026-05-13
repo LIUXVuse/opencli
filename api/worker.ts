@@ -13,6 +13,7 @@
 
 import { fetchAllRates } from './lib/forex';
 import { fetchAndRankSimCards } from './lib/sim-rank';
+import { fetchAirportTransfers } from './lib/airport-transfer';
 
 // Cloudflare Workers 環境型別
 export interface Env {
@@ -126,6 +127,17 @@ export default {
         return json({ country, days: daysParam ?? null, total: plans.length, plans });
       } catch (e) {
         return error(`SIM 卡查詢失敗：${(e as Error).message}`);
+      }
+    }
+
+    // GET /api/airport-transfer
+    if (path === '/api/airport-transfer') {
+      try {
+        const city = url.searchParams.get('city') ?? 'Hanoi';
+        const transfers = await fetchAirportTransfers(city);
+        return json({ city, transfers });
+      } catch (e) {
+        return error(`機場接送查詢失敗：${(e as Error).message}`);
       }
     }
 
