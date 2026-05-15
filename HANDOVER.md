@@ -1,24 +1,34 @@
 # HANDOVER — opencli 專案整體交接
 
-> 上次更新：2026-05-13
-> 當前狀態：v1.7，Worker 新增機場接送 API，老司機地圖出發攻略功能上線
+> 上次更新：2026-05-15
+> 當前狀態：v1.7.21，已合併 upstream，所有自訂 CLI 與最新版相容
 
 ---
 
-## ✅ 本次完成（2026-05-13）
+## ✅ 本次完成（2026-05-15）
 
-- **Worker `/api/airport-transfer`**：新增機場接送端點，從 Trip.com CityPass tab 抓取，已部署並驗證（Hanoi 回傳 $16.99 接送選項）
-- **`api/lib/airport-transfer.ts`**：新建接送查詢核心邏輯，過濾含 transfer/shuttle/taxi/pickup 關鍵字的產品，回傳前 5 筆
-- 老司機地圖「出發攻略」整合此端點（機場接送卡片）
+- **合併 upstream v1.7.21**（317 commits，從 v1.6 升到 v1.7.21）
+- **打 tag `v1.6-liu-stable`**：合併前的安全點，隨時可 `git checkout v1.6-liu-stable` 回去
+- **解決 3 個 merge 衝突**：
+  - `src/build-manifest.ts`：保留 COMPILED_CLIS_DIR 掃描邏輯，整合進 upstream 新架構
+  - `docs/adapters/index.md`：保留 forex 條目，同時加入 upstream 新增的 adapter 列表
+  - `cli-manifest.json`：接受 upstream 版本，重跑 build 補回自訂 adapter
+- **修正型別相容性**（upstream v1.7 新增必填欄位）：
+  - 所有自訂 CLI 加 `access: 'read'`
+  - `func` 簽名從 `(_page, kwargs)` 改為 `(kwargs)`（非瀏覽器指令正確簽名）
+- **安裝 `@types/jsdom`**：upstream 新增測試依賴
+- **Build 成功**：817 entries，trip/forex 全部正常載入
+- **記憶系統**：存入「用 osascript 丟垃圾桶」的 feedback，下次 agent 直接可用
+- **`.gitignore` 更新**：排除 `*.png`、`*.tgz`、`.playwright-mcp/`
 
 ### 自行新增的模組
 
 | 模組 | 位置 | 狀態 |
 |------|------|------|
-| `opencli forex rate` | `src/clis/forex/rate.ts` | ✅ 穩定 |
-| `opencli forex compare` | `src/clis/forex/compare.ts` | ✅ 穩定 |
-| `opencli forex best` | `src/clis/forex/best.ts` | ✅ 穩定 |
-| `opencli trip sim-rank` | `src/clis/trip/sim-rank.ts` | ✅ 穩定 v1.5（CLI 版） |
+| `opencli forex rate` | `src/clis/forex/rate.ts` | ✅ 穩定，已升級至 v1.7 型別 |
+| `opencli forex compare` | `src/clis/forex/compare.ts` | ✅ 穩定，已升級至 v1.7 型別 |
+| `opencli forex best` | `src/clis/forex/best.ts` | ✅ 穩定，已升級至 v1.7 型別 |
+| `opencli trip sim-rank` | `src/clis/trip/sim-rank.ts` | ✅ 穩定，已升級至 v1.7 型別 |
 | Cloudflare Worker API | `api/worker.ts` + `api/lib/sim-rank.ts` | ✅ v1.6 已部署 |
 | Worker `/api/airport-transfer` | `api/lib/airport-transfer.ts` | ✅ v1.7 已部署 |
 
@@ -42,7 +52,7 @@ opencli trip plan Vietnam --days 7 --budget 30000 --from TPE
 ## 🟡 待開發功能（按優先度）
 
 ### 1. `opencli crypto` — 加密貨幣行情（最簡單）
-- 來源：CoinGecko 公開 API
+- 來源：CoinGecko 公開 API（upstream 現在已有 coingecko adapter 可參考）
 - `opencli crypto price BTC ETH SOL`
 
 ### 2. `opencli stock` — 台股行情
@@ -57,11 +67,13 @@ opencli trip plan Vietnam --days 7 --budget 30000 --from TPE
 
 ## ⚠️ 注意事項
 
-1. **fork 關係**：origin = 自己的 GitHub fork，upstream = jackwener/opencli。pull 要從 upstream，push 到 origin
+1. **fork 關係**：origin = 自己的 GitHub fork（`LIUXVuse/opencli`），upstream = `jackwener/opencli`。pull 要從 upstream，push 到 origin
 2. **SSH 已設定**：origin remote 已改為 SSH（`git@github.com:LIUXVuse/opencli.git`），不需 GH_TOKEN
-3. **nvm 環境**：Mac 的 `~/.zshrc` 已設定 nvm，新終端機直接可用 `opencli`
-4. **API 等待限制**：Vietcombank 限制每 5 分鐘一次請求
-5. **Trip.com CityPass 資料稀少**：部分城市（如雅加達）可能查不到接送資料，前端已有 fallback 顯示
+3. **安全點**：tag `v1.6-liu-stable` 是合併前的穩定版本
+4. **nvm 環境**：Mac 的 `~/.zshrc` 已設定 nvm，新終端機直接可用 `opencli`
+5. **升級 pattern**：未來再 merge upstream 時，自訂 CLI 要補的欄位通常在 `src/registry.ts` 的 `RequiredCliOptions` 型別
+6. **API 等待限制**：Vietcombank 限制每 5 分鐘一次請求
+7. **Trip.com CityPass 資料稀少**：部分城市可能查不到接送資料，前端已有 fallback
 
 ---
 
