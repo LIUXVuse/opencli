@@ -21,6 +21,7 @@ import { getCompletionsFromManifest, hasAllManifests, printCompletionScriptFast 
 import { findPackageRoot, getCliManifestPath } from './package-paths.js';
 import { PKG_VERSION } from './version.js';
 import { EXIT_CODES } from './errors.js';
+import { isSupportedNodeVersion, MIN_SUPPORTED_NODE_MAJOR } from './runtime-detect.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,6 +33,18 @@ const USER_CLIS = path.join(os.homedir(), '.opencli', 'clis');
 // ── Ultra-fast path: lightweight commands bypass full discovery ──────────
 // These are high-frequency or trivial paths that must not pay the startup tax.
 const argv = process.argv.slice(2);
+
+if (typeof (globalThis as { Bun?: unknown }).Bun === 'undefined' && !isSupportedNodeVersion(process.version)) {
+  process.stderr.write(
+    [
+      `OpenCLI requires Node.js >= ${MIN_SUPPORTED_NODE_MAJOR}.0.0.`,
+      `Current runtime: ${process.version}`,
+      'Upgrade Node.js, then retry the same command.',
+      '',
+    ].join('\n'),
+  );
+  process.exit(EXIT_CODES.CONFIG_ERROR);
+}
 
 // Fast path: --version (only when it's the top-level intent, not passed to a subcommand)
 // e.g. `opencli --version` or `opencli -V`, but NOT `opencli gh --version`
@@ -95,13 +108,18 @@ installNodeNetwork();
 //    user-CLI discovery MUST run after built-in discovery to preserve the
 //    intended override order (user adapters override built-in ones).
 //  - discoverPlugins runs last: plugins may override both built-in and user CLIs.
-const [, ,] = await Promise.all([
-  ensureUserCliCompatShims(),
-  ensureUserAdapters(),
-  discoverClis(BUILTIN_CLIS),
-]);
-await discoverClis(USER_CLIS);
-await discoverPlugins();
+const skipUserDiscovery = argv[0] === 'convention-audit';
+if (skipUserDiscovery) {
+  await discoverClis(BUILTIN_CLIS);
+} else {
+  const [, ,] = await Promise.all([
+    ensureUserCliCompatShims(),
+    ensureUserAdapters(),
+    discoverClis(BUILTIN_CLIS),
+  ]);
+  await discoverClis(USER_CLIS);
+  await discoverPlugins();
+}
 
 // Register exit hook: notice appears after command output (same as npm/gh/yarn)
 registerUpdateNoticeOnExit();
@@ -125,6 +143,22 @@ if (getCompIdx !== -1) {
   const candidates = getCompletions(words, cursor);
   process.stdout.write(candidates.join('\n') + '\n');
   process.exit(EXIT_CODES.SUCCESS);
+}
+
+// Rewrite `opencli browser <session> <subcommand> ...` so commander (which
+// can't combine a parent positional with subcommand dispatch) sees the internal
+// `--session <name>` flag form. Also refuses the retired `opencli browser
+// --session foo ...` user form with a friendly usage error.
+const { rewriteBrowserArgv, BrowserSessionArgvError } = await import('./cli-argv-preprocess.js');
+try {
+  const rewritten = rewriteBrowserArgv(process.argv.slice(2));
+  process.argv.splice(2, process.argv.length - 2, ...rewritten);
+} catch (err) {
+  if (err instanceof BrowserSessionArgvError) {
+    process.stderr.write(`error: ${err.message}\n`);
+    process.exit(EXIT_CODES.GENERIC_ERROR);
+  }
+  throw err;
 }
 
 await emitHook('onStartup', { command: '__startup__', args: {} });

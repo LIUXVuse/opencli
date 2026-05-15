@@ -3,6 +3,7 @@ import { ensureZsxqAuth, ensureZsxqPage, fetchFirstJson, getTopicText, getTopicA
 cli({
     site: 'zsxq',
     name: 'dynamics',
+    access: 'read',
     description: '获取所有星球的最新动态',
     domain: 'wx.zsxq.com',
     strategy: Strategy.COOKIE,
@@ -37,7 +38,7 @@ cli({
                 time: d.create_time || topic.create_time || '',
                 group: topic.group?.name || '',
                 author: getTopicAuthor(topic),
-                title: getTopicText(topic).slice(0, 120),
+                title: getTopicText(topic),
                 comments: topic.comments_count ?? 0,
                 likes: topic.likes_count ?? 0,
                 url: getTopicUrl(topic.topic_id),

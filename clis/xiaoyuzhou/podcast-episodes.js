@@ -5,6 +5,7 @@ import { formatDuration, formatDate } from './utils.js';
 cli({
     site: 'xiaoyuzhou',
     name: 'podcast-episodes',
+    access: 'read',
     description: 'List episodes of a Xiaoyuzhou podcast',
     domain: 'www.xiaoyuzhoufm.com',
     strategy: Strategy.LOCAL,
@@ -14,15 +15,15 @@ cli({
         { name: 'limit', type: 'int', default: 20, help: 'Max episodes to show' },
     ],
     columns: ['eid', 'title', 'duration', 'plays', 'date'],
-    func: async (_page, args) => {
+    func: async (args) => {
         const requestedLimit = Number(args.limit);
         if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
             throw new CliError('INVALID_ARGUMENT', 'limit must be a positive integer', 'Example: --limit 5');
         }
         const credentials = loadXiaoyuzhouCredentials();
-        const response = await requestXiaoyuzhouJson('/v1/podcast/listEpisode', {
+        const response = await requestXiaoyuzhouJson('/v1/episode/list', {
             method: 'POST',
-            body: { pid: args.id, limit: requestedLimit },
+            body: { pid: args.id, order: 'desc', limit: requestedLimit },
             credentials,
         });
         const episodes = response.data ?? [];

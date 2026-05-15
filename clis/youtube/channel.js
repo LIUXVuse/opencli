@@ -3,9 +3,25 @@
  */
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { CommandExecutionError } from '@jackwener/opencli/errors';
+
+export function extractSelectedRichGridContents(browseData) {
+    const tabs = browseData?.contents?.twoColumnBrowseResultsRenderer?.tabs || [];
+    const readRichGrid = (tab) => tab?.tabRenderer?.content?.richGridRenderer?.contents;
+    const selectedTab = tabs.find(t => t?.tabRenderer?.selected);
+    const selectedContents = readRichGrid(selectedTab);
+    if (Array.isArray(selectedContents))
+        return selectedContents;
+    const fallbackContents = readRichGrid(tabs.find(t => {
+        const contents = readRichGrid(t);
+        return Array.isArray(contents) && contents.length > 0;
+    })) || readRichGrid(tabs.find(t => Array.isArray(readRichGrid(t))));
+    return Array.isArray(fallbackContents) ? fallbackContents : [];
+}
+
 cli({
     site: 'youtube',
     name: 'channel',
+    access: 'read',
     description: 'Get YouTube channel info and recent videos',
     domain: 'www.youtube.com',
     strategy: Strategy.COOKIE,
@@ -27,6 +43,7 @@ cli({
         const apiKey = cfg.INNERTUBE_API_KEY;
         const context = cfg.INNERTUBE_CONTEXT;
         if (!apiKey || !context) return {error: 'YouTube config not found'};
+        const extractSelectedRichGridContents = ${extractSelectedRichGridContents.toString()};
 
         // Resolve handle to browseId if needed
         let browseId = channelId;
@@ -115,6 +132,44 @@ cli({
           }
         }
 
+        // If Home tab has no videos, try Videos tab
+        if (recentVideos.length === 0) {
+          const videosTab = tabs.find(t => {
+            const tab = t.tabRenderer;
+            const url = tab?.endpoint?.commandMetadata?.webCommandMetadata?.url || '';
+            return tab?.tabIdentifier === 'VIDEOS'
+              || url.endsWith('/videos')
+              || tab?.title === 'Videos';
+          });
+          const videosTabParams = videosTab?.tabRenderer?.endpoint?.browseEndpoint?.params;
+          if (videosTabParams) {
+            const videosResp = await fetch('/youtubei/v1/browse?key=' + apiKey + '&prettyPrint=false', {
+              method: 'POST', credentials: 'include',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({context, browseId, params: videosTabParams})
+            });
+            if (videosResp.ok) {
+              const videosData = await videosResp.json();
+              // The InnerTube response includes ALL tabs (Home/Videos/Shorts/...),
+              // not just the requested one. Prefer the selected tab, but keep
+              // older single-tab responses working when YouTube omits selected.
+              const richGrid = extractSelectedRichGridContents(videosData);
+              for (const item of richGrid) {
+                if (recentVideos.length >= limit) break;
+                const v = item.richItemRenderer?.content?.videoRenderer;
+                if (v) {
+                  recentVideos.push({
+                    title: v.title?.runs?.[0]?.text || '',
+                    duration: v.lengthText?.simpleText || '',
+                    views: (v.shortViewCountText?.simpleText || '') + (v.publishedTimeText?.simpleText ? ' | ' + v.publishedTimeText.simpleText : ''),
+                    url: 'https://www.youtube.com/watch?v=' + v.videoId,
+                  });
+                }
+              }
+            }
+          }
+        }
+
         return {
           name: metadata.title || '',
           channelId: metadata.externalId || browseId,
@@ -148,3 +203,7 @@ cli({
         return rows;
     },
 });
+
+export const __test__ = {
+    extractSelectedRichGridContents,
+};

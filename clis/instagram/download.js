@@ -196,13 +196,14 @@ async function downloadInstagramMedia(items, outputDir) {
 cli({
     site: 'instagram',
     name: 'download',
+    access: 'read',
     description: 'Download images and videos from Instagram posts and reels',
     domain: 'www.instagram.com',
     strategy: Strategy.COOKIE,
     navigateBefore: false,
     args: [
         { name: 'url', positional: true, required: true, help: 'Instagram post / reel / tv URL' },
-        { name: 'path', default: path.join(os.homedir(), 'Downloads', 'Instagram'), help: 'Download directory' },
+        { name: 'path', default: '~/Downloads/Instagram', help: 'Download directory' },
     ],
     func: async (page, kwargs) => {
         const browserPage = ensurePage(page);
