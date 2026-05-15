@@ -224,6 +224,7 @@ cli({
   name: 'compare',
   description: '橫向比較多家台灣銀行的現鈔賣出匯率，找出最划算的換匯銀行',
   strategy: Strategy.PUBLIC,
+  access: 'read' as const,
   browser: false,
   args: [
     {
@@ -240,7 +241,7 @@ cli({
     },
   ],
   columns: ['銀行', '匯率(TWD/1外幣)', '能換到', '差距', '備註'],
-  func: async (_page, kwargs) => {
+  func: async (kwargs) => {
     const iso    = String(kwargs.currency).toUpperCase();
     const amount = Math.max(1, Number(kwargs.amount) || 10000);
 

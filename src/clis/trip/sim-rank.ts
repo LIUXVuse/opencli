@@ -433,6 +433,7 @@ cli({
   aliases: ['sim', 'simrank'],
   description: '查詢 trip.com SIM 卡方案並依 CP 值排名（預設：越南）',
   strategy: Strategy.PUBLIC,
+  access: 'read' as const,
   browser: false,
   args: [
     {
@@ -476,7 +477,7 @@ cli({
     },
   ],
   columns: ['rank', 'name', 'type', 'plan', 'days', 'daily_gb', 'min_price_usd', 'formula', 'cp_score', 'real_name_req', 'url'],
-  func: async (_page, kwargs) => {
+  func: async (kwargs) => {
     const country = String(kwargs.country || 'Vietnam').trim();
     if (!country) throw new ArgumentError('國家名稱不可為空，例如：Vietnam');
 

@@ -174,6 +174,7 @@ cli({
   name: 'best',
   description: '多國換錢策略一覽：台灣直換 vs 帶美金去當地換，找出最划算路線',
   strategy: Strategy.PUBLIC,
+  access: 'read' as const,
   browser: false,
   args: [
     {
@@ -184,7 +185,7 @@ cli({
     },
   ],
   columns: ['幣別', '名稱', '方案A 直換', '方案B 帶USD換(實際)', '差距', '推薦換匯地點'],
-  func: async (_page, kwargs) => {
+  func: async (kwargs) => {
     const twd = Math.max(1, Number(kwargs.amount) || 10000);
 
     // 平行抓取所有資料

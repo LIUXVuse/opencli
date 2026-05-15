@@ -557,6 +557,7 @@ cli({
   name: 'rate',
   description: '查詢台灣銀行即時匯率，附各國換錢策略與最優銀行建議',
   strategy: Strategy.PUBLIC,
+  access: 'read' as const,
   browser: false,
   args: [
     {
@@ -579,7 +580,7 @@ cli({
     },
   ],
   columns: ['幣別', '名稱', '現鈔賣出(TWD)', '能換到', '現鈔買入(TWD)', '來源'],
-  func: async (_page, kwargs) => {
+  func: async (kwargs) => {
     const currencyArg  = kwargs.currency ? String(kwargs.currency).toUpperCase() : null;
     const amount       = Math.max(1, Number(kwargs.amount) || 10000);
     const noStrategy   = Boolean(kwargs['no-strategy']);
