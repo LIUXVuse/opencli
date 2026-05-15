@@ -25,3 +25,8 @@ docs/.vitepress/cache
 *.db
 autoresearch/results/
 autoresearch-results.tsv
+
+# Screenshots and build artifacts
+*.png
+*.tgz
+.playwright-mcp/

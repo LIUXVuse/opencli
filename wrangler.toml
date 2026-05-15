@@ -1,0 +1,18 @@
+name = "opencli-api"
+main = "api/worker.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# KV namespace — 存每日匯率快取
+# 部署前需先建立：npx wrangler kv namespace create RATE_CACHE
+# 然後把回傳的 id 填到下方 id = "..."
+[[kv_namespaces]]
+binding = "RATE_CACHE"
+id = "f593e213cb8a487e99ad395ce4b3ade5"
+
+[build]
+command = ""
+
+# 本地開發
+[dev]
+port = 8787
